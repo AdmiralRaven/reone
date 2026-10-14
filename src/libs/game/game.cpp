@@ -40,6 +40,7 @@
 #include "reone/game/difficultyoptions.h"
 #include "reone/game/gui/hud.h"
 #include "reone/game/gui/sounds.h"
+#include "reone/game/jaconsole.h"
 #include "reone/game/location.h"
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
@@ -671,6 +672,7 @@ void Game::initConsole() {
     registerConsoleCommand("savegame", "save to a semantic slot", &Game::consoleSaveGame);
     registerConsoleCommand("startpazaak", "start a development Pazaak match", &Game::consoleStartPazaak);
     registerConsoleCommand("showpath", "show debug overlay for pathfinding", &Game::consoleShowPath);
+    registerJaConsoleCommands(*this, _console);
 
     if (_options.game.developer) {
         registerConsoleCommand("minigameinfo", "print minigame metadata for current area", &Game::consoleMiniGameInfo);
