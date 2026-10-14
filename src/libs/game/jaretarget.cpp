@@ -324,24 +324,24 @@ std::vector<JaSequenceStep> jaNamedMove(const std::string &name) {
                 {"BOTH_S1_S1_TL", -1.0f, 0.1f},
                 {"BOTH_A1_TL_BR", -1.0f, 0.1f},
                 {"BOTH_R1_BR_S1", -1.0f, 0.1f},
-                {kJaFastStance, 0.6f, 0.1f}};
+                {kJaFastStance, 0.6f, 0.35f}};
     }
     if (name == "block") {
         return {{kJaFastStance, 0.6f, 0.0f},
                 {"BOTH_P1_S1_TR", 0.5f, 0.05f},
-                {kJaFastStance, 0.6f, 0.1f}};
+                {kJaFastStance, 0.6f, 0.35f}};
     }
     if (name == "overhead") {
         return {{kJaMediumStance, 0.6f, 0.0f},
                 {"BOTH_S2_S1_T_", -1.0f, 0.1f},
                 {"BOTH_A2_T__B_", -1.0f, 0.1f},
                 {"BOTH_R2_B__S1", -1.0f, 0.1f},
-                {kJaMediumStance, 0.6f, 0.1f}};
+                {kJaMediumStance, 0.6f, 0.35f}};
     }
     if (name == "guard") {
         return {{kJaFastStance, 0.6f, 0.0f},
                 {"BOTH_P1_S1_T_", 0.7f, 0.05f},
-                {kJaFastStance, 0.6f, 0.1f}};
+                {kJaFastStance, 0.6f, 0.35f}};
     }
     if (name == "stance") {
         return {{kJaFastStance, 2.0f, 0.0f}};

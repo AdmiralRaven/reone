@@ -169,7 +169,7 @@ std::vector<JaSequenceStep> JaConsole::steps(const std::string &move, const JaSe
     float seconds = clip.loopFrames >= 0 ? 2.0f : -1.0f;
     return {{kJaFastStance, 0.4f, 0.0f},
             {boost::to_upper_copy(move), seconds, 0.1f},
-            {kJaFastStance, 0.5f, 0.1f}};
+            {kJaFastStance, 0.6f, 0.35f}};
 }
 
 void JaConsole::load(const ConsoleArgs &args) {

@@ -158,8 +158,9 @@ static constexpr const char *kJaMediumStance = "BOTH_STAND2";         /**< the m
  * - stance: the fast ready stance.
  *
  * Blends follow JA's saber move table: 100 ms into start, attack and return
- * clips, 50 ms into a parry. Holds and the return to ready are the proof's
- * choice, not traced runtime behaviour.
+ * clips, 50 ms into a parry, 350 ms into the ready stance. Holds, and going
+ * from a parry straight back to ready, are the proof's choice, not traced
+ * runtime behaviour.
  */
 std::vector<JaSequenceStep> jaNamedMove(const std::string &name);
 

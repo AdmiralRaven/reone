@@ -469,10 +469,12 @@ TEST(JaNamedMove, should_spell_out_the_named_swing_and_parry) {
         EXPECT_LT(swing[i].seconds, 0.0f) << "start, attack and return play in full";
         EXPECT_FLOAT_EQ(0.1f, swing[i].blendIn);
     }
+    EXPECT_FLOAT_EQ(0.35f, swing[4].blendIn) << "back into the ready stance";
     auto block = jaNamedMove("block");
     ASSERT_EQ(3ll, block.size());
     EXPECT_EQ(std::string("BOTH_P1_S1_TR"), block[1].clip);
     EXPECT_FLOAT_EQ(0.05f, block[1].blendIn);
+    EXPECT_FLOAT_EQ(0.35f, block[2].blendIn);
     EXPECT_TRUE(jaNamedMove("dance").empty());
 }
 
