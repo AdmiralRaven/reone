@@ -240,6 +240,9 @@ void JaConsole::play(const ConsoleArgs &args) {
         _built.push_back(animation);
     }
 
+    if (model->activeAnimationName() == animation->name() && !model->isAnimationFinished()) {
+        throw std::runtime_error("japlay " + move + " is still playing");
+    }
     auto properties = AnimationProperties::fromFlags(AnimationFlags::blend);
     properties.speed = speed;
     properties.scale = 1.0f;
@@ -350,16 +353,28 @@ void JaConsole::list(const ConsoleArgs &args) {
 
 void registerJaConsoleCommands(Game &game, IConsole &console) {
     auto tool = std::make_shared<JaConsole>(game, console);
+    // The console shows a failed command's message but does not log it; log
+    // it too, so scripted runs leave a record.
+    auto logged = [tool](const char *name, void (JaConsole::*command)(const ConsoleArgs &)) {
+        return [tool, name, command](const ConsoleArgs &args) {
+            try {
+                ((*tool).*command)(args);
+            } catch (const std::exception &e) {
+                error(std::string(name) + " failed: " + e.what());
+                throw;
+            }
+        };
+    };
     console.registerCommand("jaload", "load Jedi Academy animations: jaload <folder with _humanoid.gla and animation.cfg>",
-                            [tool](const ConsoleArgs &args) { tool->load(args); });
+                            logged("jaload", &JaConsole::load));
     console.registerCommand("japlay", "play a Jedi Academy move on the selected creature: japlay swing|block|overhead|guard|stance|<clip> [speed]",
-                            [tool](const ConsoleArgs &args) { tool->play(args); });
+                            logged("japlay", &JaConsole::play));
     console.registerCommand("jasaber", "equip and ignite a lightsaber on the selected creature: jasaber [off]",
-                            [tool](const ConsoleArgs &args) { tool->saber(args); });
+                            logged("jasaber", &JaConsole::saber));
     console.registerCommand("jacam", "aim the free camera at the selected creature: jacam [distance] [angle] [height]",
-                            [tool](const ConsoleArgs &args) { tool->camera(args); });
+                            logged("jacam", &JaConsole::camera));
     console.registerCommand("jalist", "list Jedi Academy animations: jalist [text]",
-                            [tool](const ConsoleArgs &args) { tool->list(args); });
+                            logged("jalist", &JaConsole::list));
 }
 
 } // namespace game

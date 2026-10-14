@@ -72,6 +72,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/game/saveprovenance.cpp
     ${TESTS_SOURCE_DIR}/game/savedsituation.cpp
     ${TESTS_SOURCE_DIR}/game/journal.cpp
+    ${TESTS_SOURCE_DIR}/game/jaconsole.cpp
     ${TESTS_SOURCE_DIR}/game/jaretarget.cpp
     ${TESTS_SOURCE_DIR}/game/messagebus.cpp
     ${TESTS_SOURCE_DIR}/game/minigame.cpp
