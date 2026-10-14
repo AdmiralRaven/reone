@@ -29,6 +29,8 @@ class IConsole;
  * characters, read from the player's own Jedi Academy files:
  *
  * - jaload <folder>: read _humanoid.gla and animation.cfg from a folder;
+ * - jaloadsave [number]: load the saved game listgames shows with that
+ *   number, or the last one it shows;
  * - japlay swing|block|overhead|guard|stance|<clip> [speed]: play a move
  *   (see jaNamedMove) or any clip on the selected creature, or the party
  *   leader;

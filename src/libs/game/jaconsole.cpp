@@ -59,6 +59,7 @@ public:
     }
 
     void load(const ConsoleArgs &args);
+    void loadSave(const ConsoleArgs &args);
     void play(const ConsoleArgs &args);
     void saber(const ConsoleArgs &args);
     void camera(const ConsoleArgs &args);
@@ -208,6 +209,32 @@ void JaConsole::load(const ConsoleArgs &args) {
     _clips = std::move(clips);
     print(str(boost::format("jaload: %s, %d bones, %d frames, %d clips") %
               _gla->name() % _gla->numBones() % _gla->numFrames() % _clips.size()));
+}
+
+void JaConsole::loadSave(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jaloadsave [number from listgames]");
+    }
+    // The list listgames prints and loadgame indexes: only complete save
+    // slots, one per slot number, by slot.
+    auto saves = _game.savedGames();
+    if (saves.empty()) {
+        throw std::runtime_error("No saved games to load");
+    }
+    size_t index = saves.size() - 1;
+    if (args.size() == 2) {
+        auto value = args.get<size_t>(1);
+        if (!value || *value >= saves.size()) {
+            throw std::runtime_error(str(boost::format("No saved game %s: listgames numbers them 0 to %d") %
+                                         std::string(*args[1]) % (saves.size() - 1)));
+        }
+        index = *value;
+    }
+    std::string folder(saves[index].descriptor.directory.filename().string());
+    print(str(boost::format("jaloadsave: loading [%d] %s") % index % folder));
+    if (!_game.loadGame(saves[index].descriptor)) {
+        throw std::runtime_error("Could not load " + folder);
+    }
 }
 
 void JaConsole::play(const ConsoleArgs &args) {
@@ -367,6 +394,8 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
     };
     console.registerCommand("jaload", "load Jedi Academy animations: jaload <folder with _humanoid.gla and animation.cfg>",
                             logged("jaload", &JaConsole::load));
+    console.registerCommand("jaloadsave", "load a saved game by its listgames number, or the last one: jaloadsave [number]",
+                            logged("jaloadsave", &JaConsole::loadSave));
     console.registerCommand("japlay", "play a Jedi Academy move on the selected creature: japlay swing|block|overhead|guard|stance|<clip> [speed]",
                             logged("japlay", &JaConsole::play));
     console.registerCommand("jasaber", "equip and ignite a lightsaber on the selected creature: jasaber [off]",

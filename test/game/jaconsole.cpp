@@ -21,10 +21,13 @@
 #include "../fixtures/gla.h"
 #include "reone/game/game.h"
 #include "reone/game/jaconsole.h"
+#include "reone/resource/format/gffwriter.h"
+#include "reone/resource/gff.h"
 #include "reone/resource/types.h"
 
 using namespace reone;
 using namespace reone::game;
+using namespace reone::resource;
 using namespace reone::test;
 
 namespace {
@@ -61,6 +64,32 @@ std::string lastLine(const StubConsole &console) {
     return console.lines.empty() ? std::string() : console.lines.back();
 }
 
+std::string failure(StubConsole &console, const std::string &name, std::vector<std::string> args) {
+    try {
+        console.execute(name, std::move(args));
+    } catch (const std::exception &e) {
+        return std::string(e.what());
+    }
+    return std::string("no error");
+}
+
+// A save slot complete enough for the engine to list it.
+void writeSaveSlot(const std::filesystem::path &directory) {
+    std::filesystem::create_directories(directory);
+    std::ofstream(directory / "SAVEGAME.sav", std::ios::binary).put('x');
+    auto nfo = Gff::Builder()
+                   .field(Gff::Field::newCExoString("AREANAME", "Upper City"))
+                   .field(Gff::Field::newCExoString("LASTMODULE", "tar_m02aa"))
+                   .field(Gff::Field::newCExoString("PCNAME", "Revan"))
+                   .field(Gff::Field::newDword("TIMEPLAYED", 3723))
+                   .field(Gff::Field::newCExoString("SAVEGAMENAME", directory.filename().string()))
+                   .field(Gff::Field::newCExoString("PORTRAIT0", "po_pmhc01"))
+                   .build();
+    auto bytes = GffWriter(GffFileFormat::v32("NFO "), *nfo).toBytes();
+    std::ofstream nfoFile(directory / "savenfo.res", std::ios::binary);
+    nfoFile.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
 } // namespace
 
 TEST(JaConsole, should_register_the_commands) {
@@ -70,9 +99,48 @@ TEST(JaConsole, should_register_the_commands) {
 
     registerJaConsoleCommands(game, console);
 
-    for (auto name : {"jaload", "japlay", "jasaber", "jacam", "jalist"}) {
+    for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist"}) {
         EXPECT_TRUE(console.hasCommand(name)) << name;
     }
+}
+
+TEST(JaConsole, should_number_saved_games_as_listgames_does) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    // One complete slot, a second copy of the same slot, a folder that is not
+    // a slot and a slot without its files: four folders, one saved game.
+    auto root = std::filesystem::temp_directory_path() /
+                ("reone-jaconsole-saves-" + std::to_string(std::random_device()()));
+    writeSaveSlot(root / "saves" / "000002 - Game1");
+    writeSaveSlot(root / "saves" / "000002 - Game1 copy");
+    std::filesystem::create_directories(root / "saves" / "backup");
+    std::filesystem::create_directories(root / "saves" / "000007 - Game6");
+    Game game(resource::GameID::KotOR, root, engine.options(), engine.services(), console);
+    registerJaConsoleCommands(game, console);
+
+    EXPECT_EQ(1ll, game.savedGames().size());
+    EXPECT_NE(std::string::npos, failure(console, "jaloadsave", {"1"}).find("No saved game 1: listgames numbers them 0 to 0"));
+    EXPECT_NE(std::string::npos, failure(console, "jaloadsave", {"3"}).find("0 to 0"));
+    EXPECT_NE(std::string::npos, failure(console, "jaloadsave", {"-1"}).find("No saved game -1"));
+    EXPECT_NE(std::string::npos, failure(console, "jaloadsave", {"0", "1"}).find("Usage"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(JaConsole, should_say_when_there_is_no_saved_game) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    auto root = std::filesystem::temp_directory_path() /
+                ("reone-jaconsole-nosaves-" + std::to_string(std::random_device()()));
+    std::filesystem::create_directories(root);
+    Game game(resource::GameID::KotOR, root, engine.options(), engine.services(), console);
+    registerJaConsoleCommands(game, console);
+
+    EXPECT_NE(std::string::npos, failure(console, "jaloadsave", {}).find("No saved games"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST(JaConsole, should_load_animations_from_a_folder_and_list_clips) {
@@ -98,24 +166,15 @@ TEST(JaConsole, should_explain_what_is_missing) {
     Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
     registerJaConsoleCommands(game, console);
 
-    auto failure = [&](const std::string &name, std::vector<std::string> args) {
-        try {
-            console.execute(name, std::move(args));
-        } catch (const std::exception &e) {
-            return std::string(e.what());
-        }
-        return std::string("no error");
-    };
-
-    EXPECT_NE(std::string::npos, failure("japlay", {"swing"}).find("Run jaload"));
-    EXPECT_NE(std::string::npos, failure("jalist", {}).find("Run jaload"));
-    EXPECT_NE(std::string::npos, failure("jaload", {}).find("Usage"));
-    EXPECT_NE(std::string::npos, failure("jaload", {"/no/such/folder"}).find("Not found"));
+    EXPECT_NE(std::string::npos, failure(console, "japlay", {"swing"}).find("Run jaload"));
+    EXPECT_NE(std::string::npos, failure(console, "jalist", {}).find("Run jaload"));
+    EXPECT_NE(std::string::npos, failure(console, "jaload", {}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jaload", {"/no/such/folder"}).find("Not found"));
 
     JaFiles files;
     console.execute("jaload", {files.folder().string()});
-    EXPECT_NE(std::string::npos, failure("japlay", {"swing"}).find("Load a game first"));
-    EXPECT_NE(std::string::npos, failure("japlay", {"swing", "0"}).find("Speed must be"));
-    EXPECT_NE(std::string::npos, failure("jasaber", {}).find("Load a game first"));
-    EXPECT_NE(std::string::npos, failure("jacam", {}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "japlay", {"swing"}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "japlay", {"swing", "0"}).find("Speed must be"));
+    EXPECT_NE(std::string::npos, failure(console, "jasaber", {}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jacam", {}).find("Load a game first"));
 }
