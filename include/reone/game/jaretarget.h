@@ -36,8 +36,9 @@ namespace game {
  *
  * - each mapped KOTOR bone takes the model-space rotation of its JA
  *   counterpart, after both bind poses are aligned along the bone;
- * - the right hand is turned so that the weapon's +Z, the blade, follows the
- *   +Z of JA's saber tag, with the forearm fixing the twist;
+ * - the right hand turns with JA's saber tag: the weapon's +Z, the blade,
+ *   follows the tag's +Z exactly, and the twist about it turns as the tag
+ *   turns from the bind pose, where the forearm sets it once;
  * - the root dummy follows JA's pelvis, scaled by the ratio of pelvis heights.
  *
  * JA's model axes (left +X, forward -Y, up +Z) map onto KOTOR's (right +X,
@@ -78,7 +79,7 @@ public:
 
     /**
      * \throws std::runtime_error naming the KOTOR nodes or JA bones that are
-     *         missing
+     *         missing, or a JA bone whose base pose has no usable rotation
      */
     JaRetargeter(const graphics::GhoulAnimation &ja, const graphics::Model &body);
 
@@ -90,7 +91,12 @@ public:
     /** KOTOR units per JA unit. */
     float scale() const { return _scale; }
 
-    /** The body pose for one JA frame. */
+    /**
+     * The body pose for one JA frame.
+     *
+     * \throws std::runtime_error when the frame gives a node no finite
+     *         rotation or position, rather than returning one
+     */
     Pose pose(int frame) const;
 
     /** Model-space transforms of all nodes in a pose. */
@@ -123,18 +129,17 @@ private:
     int _rootNode {-1};
     int _weaponNode {-1};
     int _weaponHandNode {-1};
-    int _forearmNode {-1};
 
     int _jaRootBone {-1};
     int _jaPelvis {-1};
     int _jaSaberTag {-1};
-    int _jaRadius {-1};
-    int _jaHand {-1};
 
     float _scale {1.0f};
     glm::vec3 _jaPelvisBind {0.0f};
     glm::mat3 _weaponLocalRotation {1.0f};
-    glm::vec3 _forearmInWeaponFrame {0.0f};
+    glm::mat3 _weaponCalibration {1.0f}; /**< from the saber tag's frame to the weapon's: a turn about +Z */
+
+    glm::mat3 saberTagFrame(const std::vector<glm::mat4> &jaTransforms, int frame) const;
 };
 
 /** One step of a JA move sequence. */
@@ -184,7 +189,13 @@ public:
     /** The body pose a clip shows at a time, between its frames as needed. Looping clips wrap. */
     JaRetargeter::Pose sample(const std::string &name, float time) const;
 
-    /** Poses at the sample rate for a whole sequence. */
+    /**
+     * Poses at the sample rate for a whole sequence. A step that plays a whole
+     * clip ends on the clip's last frame, holding it for the rest of a sample
+     * interval when the clip ends between samples, so the next step blends
+     * from the true end pose. A step of set seconds takes the nearest whole
+     * number of samples.
+     */
     std::vector<JaRetargeter::Pose> timeline(const std::vector<JaSequenceStep> &steps) const;
 
     /**

@@ -28,6 +28,26 @@ namespace reone {
 
 namespace game {
 
+// In the bind pose the forearm sets the weapon's twist about the blade only
+// when it lies at least 15 degrees off the blade's line.
+static constexpr float kMinForearmSine = 0.258819045f;
+
+// A saber tag's +Y and +Z are perpendicular; nearer than 30 degrees to
+// parallel is broken data.
+static constexpr float kMinTagSine = 0.5f;
+
+static bool isFinite(const glm::vec3 &v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+static bool isFinite(const glm::quat &q) {
+    return std::isfinite(q.w) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+}
+
+static bool isFinite(const glm::mat3 &m) {
+    return isFinite(m[0]) && isFinite(m[1]) && isFinite(m[2]);
+}
+
 // A half turn about Z: JA's model axes to KOTOR's. It is its own inverse.
 static glm::vec3 toKotorAxes(const glm::vec3 &v) {
     return glm::vec3(-v.x, -v.y, v.z);
@@ -83,16 +103,18 @@ static glm::mat3 rotationBetween(glm::vec3 a, glm::vec3 b) {
     return glm::mat3(1.0f) + skew + skew * skew * (1.0f / (1.0f + c));
 }
 
-// The frame with z exactly along z, and y as near as possible to y.
-static glm::mat3 frameOf(glm::vec3 z, const glm::vec3 &y) {
-    z = glm::normalize(z);
-    glm::vec3 x(glm::normalize(glm::cross(y, z)));
-    return glm::mat3(x, glm::cross(z, x), z);
-}
-
-// The rotation taking (zFrom, yFrom) onto (zTo, yTo), exact for z.
-static glm::mat3 rotationBetweenFrames(const glm::vec3 &zFrom, const glm::vec3 &yFrom, const glm::vec3 &zTo, const glm::vec3 &yTo) {
-    return frameOf(zTo, yTo) * glm::transpose(frameOf(zFrom, yFrom));
+// The frame with z exactly along z, and y as near as possible to y; nothing
+// when the two are nearer to parallel than asin(minSine), which leaves the
+// turn about z undecided, or when either is zero or not finite.
+static std::optional<glm::mat3> frameOf(const glm::vec3 &z, const glm::vec3 &y, float minSine) {
+    glm::vec3 x(glm::cross(y, z));
+    float sine = glm::length(x) / (glm::length(y) * glm::length(z));
+    if (!(sine >= minSine)) {
+        return std::nullopt;
+    }
+    glm::vec3 zAxis(glm::normalize(z));
+    glm::vec3 xAxis(glm::normalize(x));
+    return glm::mat3(xAxis, glm::cross(zAxis, xAxis), zAxis);
 }
 
 const std::vector<JaRetargeter::BoneMapping> &JaRetargeter::boneMappings() {
@@ -162,11 +184,11 @@ JaRetargeter::JaRetargeter(const GhoulAnimation &ja, const Model &body) :
     _rootNode = requireNode(kRootNode);
     _weaponNode = requireNode(kWeaponNode);
     _weaponHandNode = requireNode(kWeaponHandNode);
-    _forearmNode = requireNode("rforearm_g");
+    int forearmNode = requireNode("rforearm_g");
     _jaPelvis = requireBone("pelvis");
     _jaSaberTag = requireBone(kSaberTagBone);
-    _jaRadius = requireBone("rradius");
-    _jaHand = requireBone("rhand");
+    int jaRadius = requireBone("rradius");
+    int jaHand = requireBone("rhand");
     for (auto &mapping : boneMappings()) {
         requireNode(mapping.kotor);
         requireBone(mapping.ja);
@@ -193,8 +215,8 @@ JaRetargeter::JaRetargeter(const GhoulAnimation &ja, const Model &body) :
     // KOTOR units per JA unit, from the height of the pelvis
     float jaPelvisHeight = _ja.bones()[_jaPelvis].basePose[3].z;
     float kotorPelvisHeight = _nodes[_rootNode].bindTransform[3].z;
-    if (std::abs(jaPelvisHeight) < 1e-4f || kotorPelvisHeight <= 0.0f) {
-        throw std::runtime_error("Cannot scale JA animations: a pelvis height is zero");
+    if (!(std::abs(jaPelvisHeight) >= 1e-4f) || !(kotorPelvisHeight > 0.0f) || !std::isfinite(kotorPelvisHeight)) {
+        throw std::runtime_error("Cannot scale JA animations: a pelvis height is zero or not a number");
     }
     _scale = kotorPelvisHeight / jaPelvisHeight;
 
@@ -216,16 +238,57 @@ JaRetargeter::JaRetargeter(const GhoulAnimation &ja, const Model &body) :
             kotorBind = rotationBetween(kotorDirection, jaDirection) * kotorBind;
         }
         mapped.offset = glm::transpose(jaRotation(jaBind, mapped.bone)) * kotorBind;
+        if (!isFinite(mapped.offset)) {
+            throw std::runtime_error(str(boost::format("JA bone %s cannot drive %s: a base pose has no usable rotation") %
+                                         _ja.bones()[mapped.bone].name % mapping.kotor));
+        }
         _mapped.push_back(mapped);
     }
     _jaPelvisBind = jaPosition(jaBind, noRoot, _jaPelvis);
+    if (!isFinite(_jaPelvisBind)) {
+        throw std::runtime_error("JA bone pelvis has no usable base pose");
+    }
 
-    // The weapon hand: the weapon node's rest rotation under the hand, and
-    // where the forearm lies in the weapon node's frame.
+    // The weapon hand turns with the saber tag. Only its twist about the
+    // blade needs choosing, once, in the bind pose: there the forearm keeps
+    // the angle around the blade it has in KOTOR's bind pose. The forearm is
+    // not consulted again, because when a frame points the blade along it, it
+    // says nothing about the twist.
     _weaponLocalRotation = glm::mat3_cast(_nodes[_weaponNode].restOrientation);
-    glm::mat3 weaponBind(_nodes[_weaponNode].bindTransform);
-    glm::vec3 forearm(_nodes[_forearmNode].bindTransform[3] - _nodes[_weaponHandNode].bindTransform[3]);
-    _forearmInWeaponFrame = glm::transpose(weaponBind) * glm::normalize(forearm);
+    glm::mat3 weaponBind(nearestRotation(glm::mat3(_nodes[_weaponNode].bindTransform)));
+    glm::mat3 tagBind(saberTagFrame(jaBind, -1));
+    glm::vec3 kotorForearm(_nodes[forearmNode].bindTransform[3] - _nodes[_weaponHandNode].bindTransform[3]);
+    glm::vec3 jaForearm(jaPosition(jaBind, noRoot, jaRadius) - jaPosition(jaBind, noRoot, jaHand));
+    auto weaponAndForearm = frameOf(glm::vec3(0.0f, 0.0f, 1.0f), glm::transpose(weaponBind) * kotorForearm, kMinForearmSine);
+    auto bladeAndForearm = frameOf(tagBind[2], jaForearm, kMinForearmSine);
+    glm::mat3 weaponAtBind;
+    if (weaponAndForearm && bladeAndForearm) {
+        weaponAtBind = *bladeAndForearm * glm::transpose(*weaponAndForearm);
+    } else {
+        // A forearm along the blade sets nothing: turn KOTOR's bind weapon the
+        // shortest way onto the blade instead.
+        weaponAtBind = rotationBetween(weaponBind[2], tagBind[2]) * weaponBind;
+    }
+    // Both frames have +Z on the blade, so they differ by a turn about it.
+    glm::mat3 twist(glm::transpose(tagBind) * weaponAtBind);
+    float angle = std::atan2(twist[0][1], twist[0][0]);
+    if (!std::isfinite(angle)) {
+        throw std::runtime_error("Cannot place the weapon: the right arm's bind poses are not usable");
+    }
+    float c = std::cos(angle);
+    float s = std::sin(angle);
+    _weaponCalibration = glm::mat3(c, s, 0.0f, -s, c, 0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+glm::mat3 JaRetargeter::saberTagFrame(const std::vector<glm::mat4> &jaTransforms, int frame) const {
+    glm::mat3 tag(toKotorAxes(glm::mat3(jaTransforms[_jaSaberTag])));
+    auto result = frameOf(tag[2], tag[1], kMinTagSine);
+    if (!result) {
+        throw std::runtime_error(frame < 0
+                                     ? std::string("JA bone ") + kSaberTagBone + " has no usable rotation in its base pose"
+                                     : str(boost::format("JA frame %d: %s has no usable rotation") % frame % kSaberTagBone));
+    }
+    return *result;
 }
 
 int JaRetargeter::nodeIndex(const std::string &name) const {
@@ -259,11 +322,9 @@ JaRetargeter::Pose JaRetargeter::pose(int frame) const {
     for (auto &mapped : _mapped) {
         wanted[mapped.node] = jaRotation(ja, mapped.bone) * mapped.offset;
     }
-    // The weapon hand follows the blade: weapon +Z along JA's tag +Z, the
-    // forearm fixing the twist.
-    glm::vec3 blade(glm::normalize(toKotorAxes(glm::vec3(ja[_jaSaberTag][2]))));
-    glm::vec3 forearm(glm::normalize(jaPosition(ja, rootTranslation, _jaRadius) - jaPosition(ja, rootTranslation, _jaHand)));
-    glm::mat3 weapon(rotationBetweenFrames(glm::vec3(0.0f, 0.0f, 1.0f), _forearmInWeaponFrame, blade, forearm));
+    // The weapon hand turns with the saber tag: weapon +Z exactly along the
+    // tag's +Z, the blade, and the twist calibrated in the bind pose.
+    glm::mat3 weapon(saberTagFrame(ja, frame) * _weaponCalibration);
     wanted[_weaponHandNode] = weapon * glm::transpose(_weaponLocalRotation);
 
     Pose pose;
@@ -293,6 +354,16 @@ JaRetargeter::Pose JaRetargeter::pose(int frame) const {
             rotations[i] = parentRotation * restRotation;
             pose.orientations[i] = node.restOrientation;
         }
+    }
+
+    // Nothing that is not a number may reach an animation's keys.
+    for (size_t i = 0; i < _nodes.size(); ++i) {
+        if (!isFinite(pose.orientations[i])) {
+            throw std::runtime_error(str(boost::format("JA frame %d gives %s no finite rotation") % frame % _nodes[i].name));
+        }
+    }
+    if (!isFinite(pose.rootPosition)) {
+        throw std::runtime_error(str(boost::format("JA frame %d gives %s no finite position") % frame % kRootNode));
     }
     return pose;
 }
@@ -398,6 +469,11 @@ JaRetargeter::Pose JaSequencer::sample(const std::string &name, float time) cons
     const GhoulAnimationClip &c = clip(name);
     int count = c.numFrames;
     float position = std::max(0.0f, time) * clipRate(c);
+    // Within rounding of a frame, as at a clip's end, take that frame.
+    float nearest = std::round(position);
+    if (std::abs(position - nearest) < 1e-4f) {
+        position = nearest;
+    }
     int first, second;
     float factor;
     if (c.loopFrames >= 0 && count > 1) {
@@ -426,7 +502,12 @@ std::vector<JaRetargeter::Pose> JaSequencer::timeline(const std::vector<JaSequen
     for (auto &step : steps) {
         bool fullLength = step.seconds < 0.0f;
         float length = fullLength ? clipLength(step.clip) : step.seconds;
-        int intervals = std::max(1, static_cast<int>(std::lround(length * _sampleRate)));
+        // A whole clip runs through its last frame: enough intervals to reach
+        // it (allowing for rounding), the last sample held at the clip's end.
+        int intervals = fullLength
+                            ? static_cast<int>(std::ceil(length * _sampleRate - 1e-3f))
+                            : static_cast<int>(std::lround(length * _sampleRate));
+        intervals = std::max(1, intervals);
         int count = fullLength ? intervals + 1 : intervals;
         std::optional<JaRetargeter::Pose> previous;
         if (!poses.empty()) {
@@ -434,7 +515,7 @@ std::vector<JaRetargeter::Pose> JaSequencer::timeline(const std::vector<JaSequen
         }
         for (int k = 0; k < count; ++k) {
             float time = static_cast<float>(k) / _sampleRate;
-            JaRetargeter::Pose pose(sample(step.clip, time));
+            JaRetargeter::Pose pose(sample(step.clip, fullLength ? std::min(time, length) : time));
             if (previous && step.blendIn > 0.0f && time < step.blendIn) {
                 pose = JaRetargeter::blend(*previous, pose, time / step.blendIn);
             }

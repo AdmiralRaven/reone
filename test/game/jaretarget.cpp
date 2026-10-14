@@ -51,9 +51,9 @@ namespace {
 
 constexpr float kDegree = glm::pi<float>() / 180.0f;
 
+// Precise near zero, unlike the arccosine of a dot product.
 float angleBetween(const glm::vec3 &a, const glm::vec3 &b) {
-    float c = glm::dot(glm::normalize(a), glm::normalize(b));
-    return std::acos(glm::clamp(c, -1.0f, 1.0f));
+    return std::atan2(glm::length(glm::cross(a, b)), glm::dot(a, b));
 }
 
 glm::vec3 toKotorAxes(const glm::vec3 &v) {
@@ -64,10 +64,30 @@ glm::quat turn(float degrees, const glm::vec3 &axis) {
     return glm::angleAxis(degrees * kDegree, glm::normalize(axis));
 }
 
+// The angle of the turn from one rotation to another, precise near zero.
+float rotationAngle(const glm::mat3 &from, const glm::mat3 &to) {
+    glm::quat q(glm::quat_cast(glm::transpose(from) * to));
+    return 2.0f * std::atan2(glm::length(glm::vec3(q.x, q.y, q.z)), std::abs(q.w));
+}
+
+bool isFinite(const glm::quat &q) {
+    return std::isfinite(q.w) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+}
+
+// JA's saber tag in a frame, without Ghoul2's scale: +Z kept, +Y squared to it.
+glm::mat3 tagRotation(const GhoulAnimation &gla, int frame) {
+    glm::mat3 tag(gla.boneTransforms(frame)[gla.boneIndex("rhang_tag_bone")]);
+    glm::vec3 z(glm::normalize(tag[2]));
+    glm::vec3 x(glm::normalize(glm::cross(tag[1], z)));
+    return glm::mat3(x, glm::cross(z, x), z);
+}
+
 // A Ghoul2 humanoid in JA's axes (left +X, forward -Y, up +Z), T-posed, with
 // the base pose scale Jedi Academy uses and a few arbitrary bone frames.
-// Frame 0 is the bind pose; frames 1 and 2 move the body.
-GlaBuilder syntheticJaSkeleton() {
+// Frame 0 is the bind pose; frames 1 and 2 move the body. Each of handTurns
+// adds a frame that turns the right hand, and the saber tag with it, about
+// the wrist; the forearm points from the wrist along +X.
+GlaBuilder syntheticJaSkeleton(const std::vector<glm::quat> &handTurns = {}) {
     struct Spec {
         const char *name;
         const char *parent;
@@ -137,6 +157,9 @@ GlaBuilder syntheticJaSkeleton() {
           {"rhang_tag_bone", GlaBuilder::turnAbout(position("rhang_tag_bone"), turn(15.0f, {0, 1, 0}))},
           {"upper_lumbar", GlaBuilder::turnAbout(position("upper_lumbar"), turn(20.0f, {1, 0, 0}))},
           {"rtibia", GlaBuilder::turnAbout(position("rtibia"), turn(-35.0f, {1, 0, 0}))}});
+    for (auto &handTurn : handTurns) {
+        pose({{"rhand", GlaBuilder::turnAbout(position("rhand"), handTurn)}});
+    }
     return gla;
 }
 
@@ -150,7 +173,8 @@ std::shared_ptr<GhoulAnimation> loadGla(const GlaBuilder &builder) {
 
 // A KOTOR-like body in KOTOR's axes (right +X, forward +Y, up +Z), arms
 // hanging at 45 degrees, with arbitrary node frames where KOTOR has them.
-std::shared_ptr<Model> syntheticKotorBody(bool withSkin, const std::string &omit = "") {
+// weapon replaces the weapon node's model-space rotation.
+std::shared_ptr<Model> syntheticKotorBody(bool withSkin, const std::string &omit = "", std::optional<glm::quat> weapon = std::nullopt) {
     struct Spec {
         const char *name;
         const char *parent;
@@ -198,7 +222,8 @@ std::shared_ptr<Model> syntheticKotorBody(bool withSkin, const std::string &omit
             parentOf[spec.name] = parentName;
             continue;
         }
-        glm::mat4 global(glm::translate(spec.position) * glm::mat4_cast(spec.rotation));
+        glm::quat rotation(weapon && std::string(spec.name) == "rhand" ? *weapon : spec.rotation);
+        glm::mat4 global(glm::translate(spec.position) * glm::mat4_cast(rotation));
         glm::mat4 local(global);
         ModelNode *parent = nullptr;
         if (!parentName.empty()) {
@@ -343,6 +368,97 @@ TEST(JaRetargeter, should_name_what_a_body_is_missing) {
     }
 }
 
+TEST(JaRetargeter, should_turn_the_hand_with_the_saber_tag_when_the_blade_lies_along_the_forearm) {
+    // given: the hand turned so that the blade points along the forearm, against
+    // it, and 2 degrees to either side of it, where the forearm's angle around
+    // the blade jumps by half a turn
+    const glm::vec3 up(0.0f, 0.0f, 1.0f);
+    const glm::vec3 across(0.0f, 1.0f, 0.0f);
+    auto gla = loadGla(syntheticJaSkeleton({turn(90.0f, up),
+                                            turn(-90.0f, up),
+                                            turn(2.0f, across) * turn(90.0f, up),
+                                            turn(-2.0f, across) * turn(90.0f, up)}));
+    auto body = syntheticKotorBody(true);
+    auto retargeter = JaRetargeter(*gla, *body);
+    int weapon = retargeter.nodeIndex("rhand");
+    ASSERT_EQ(7, gla->numFrames());
+    for (int frame : {3, 4}) {
+        auto ja = gla->boneTransforms(frame);
+        glm::vec3 forearm(ja[gla->boneIndex("rradius")][3] - ja[gla->boneIndex("rhand")][3]);
+        glm::vec3 blade(ja[gla->boneIndex("rhang_tag_bone")][2]);
+        ASSERT_GT(std::abs(glm::dot(glm::normalize(forearm), glm::normalize(blade))), std::cos(0.1f * kDegree)) << "frame " << frame;
+    }
+
+    // when
+    std::vector<glm::mat3> weapons;
+    for (int frame = 0; frame < gla->numFrames(); ++frame) {
+        auto pose = retargeter.pose(frame);
+        for (size_t i = 0; i < pose.orientations.size(); ++i) {
+            ASSERT_TRUE(isFinite(pose.orientations[i])) << retargeter.nodes()[i].name << " in frame " << frame;
+        }
+        weapons.push_back(glm::mat3(retargeter.transforms(pose)[weapon]));
+    }
+
+    // then: the blade follows the tag, and from any frame to any other the hand
+    // turns exactly as far as the tag does
+    for (int a = 0; a < gla->numFrames(); ++a) {
+        EXPECT_LT(angleBetween(weapons[a][2], retargeter.bladeDirection(a)), 0.01f * kDegree) << "frame " << a;
+        for (int b = a + 1; b < gla->numFrames(); ++b) {
+            EXPECT_NEAR(rotationAngle(tagRotation(*gla, a), tagRotation(*gla, b)), rotationAngle(weapons[a], weapons[b]), 0.01f * kDegree)
+                << "frames " << a << " and " << b;
+        }
+    }
+    // Across the forearm's line that is 4 degrees, not half a turn.
+    EXPECT_NEAR(4.0f * kDegree, rotationAngle(weapons[5], weapons[6]), 0.05f * kDegree);
+}
+
+TEST(JaRetargeter, should_turn_the_bind_weapon_onto_the_blade_when_the_bind_forearm_lies_along_it) {
+    // given: a body whose bind pose holds the blade along the forearm, so the
+    // forearm cannot set the twist
+    auto gla = loadGla(syntheticJaSkeleton());
+    auto body = syntheticKotorBody(true, "", turn(-45.0f, {0, 1, 0}));
+    auto retargeter = JaRetargeter(*gla, *body);
+    const auto &nodes = retargeter.nodes();
+    int weapon = retargeter.nodeIndex("rhand");
+    glm::vec3 forearm(nodes[retargeter.nodeIndex("rforearm_g")].bindTransform[3] - nodes[retargeter.nodeIndex("rhand_g")].bindTransform[3]);
+    glm::mat3 weaponBind(nodes[weapon].bindTransform);
+    ASSERT_LT(angleBetween(weaponBind[2], forearm), 0.1f * kDegree);
+
+    // when
+    auto bind = retargeter.transforms(retargeter.pose(0));
+
+    // then: KOTOR's bind weapon is turned the shortest way onto the blade,
+    // about the axis across both
+    glm::mat3 weaponAtBind(bind[weapon]);
+    EXPECT_LT(angleBetween(weaponAtBind[2], retargeter.bladeDirection(0)), 0.01f * kDegree);
+    glm::vec3 axis(glm::normalize(glm::cross(weaponBind[2], weaponAtBind[2])));
+    EXPECT_LT(glm::distance(axis, weaponAtBind * glm::transpose(weaponBind) * axis), 1e-4f);
+    for (int frame = 1; frame < gla->numFrames(); ++frame) {
+        auto kotor = retargeter.transforms(retargeter.pose(frame));
+        EXPECT_LT(angleBetween(glm::vec3(kotor[weapon][2]), retargeter.bladeDirection(frame)), 0.01f * kDegree);
+        EXPECT_NEAR(rotationAngle(tagRotation(*gla, 0), tagRotation(*gla, frame)), rotationAngle(weaponAtBind, glm::mat3(kotor[weapon])), 0.01f * kDegree);
+    }
+}
+
+TEST(JaRetargeter, should_refuse_ja_bones_without_a_usable_base_rotation) {
+    auto body = syntheticKotorBody(true);
+    for (std::string name : {"rhang_tag_bone", "lfemurYZ"}) {
+        auto builder = syntheticJaSkeleton();
+        for (auto &bone : builder.bones) {
+            if (bone.name == name) {
+                bone.basePose[0] = bone.basePose[1] = bone.basePose[2] = glm::vec4(0.0f);
+            }
+        }
+        auto gla = loadGla(builder);
+        try {
+            JaRetargeter retargeter(*gla, *body);
+            ADD_FAILURE() << "expected an error for " << name;
+        } catch (const std::runtime_error &e) {
+            EXPECT_NE(std::string::npos, std::string(e.what()).find(name)) << e.what();
+        }
+    }
+}
+
 TEST(JaSequencer, should_sample_clips_between_frames_backwards_and_looping) {
     // given
     auto gla = loadGla(syntheticJaSkeleton());
@@ -406,6 +522,38 @@ TEST(JaSequencer, should_build_a_kotor_animation_of_a_sequence) {
     auto bicep = animation->getNodeByName("rbicep_g");
     ASSERT_TRUE(static_cast<bool>(bicep));
     EXPECT_EQ(7ll, bicep->quaternionTracks().at(ControllerTypes::orientation).keyframes().size());
+}
+
+TEST(JaSequencer, should_end_a_whole_clip_on_its_last_frame_between_samples) {
+    // given: 3 frames at 50 fps take 0.04 s, 2.4 intervals at 60 Hz
+    auto gla = loadGla(syntheticJaSkeleton());
+    auto body = syntheticKotorBody(true);
+    auto retargeter = JaRetargeter(*gla, *body);
+    auto clips = syntheticClips();
+    clips["ODD"] = {0, 3, -1, 50.0f};
+    clips["ODDLOOP"] = {0, 3, 0, 50.0f};
+    auto sequencer = JaSequencer(retargeter, clips, 60.0f);
+    auto frame0 = retargeter.pose(0);
+    auto frame1 = retargeter.pose(1);
+    auto frame2 = retargeter.pose(2);
+
+    for (std::string name : {"ODD", "ODDLOOP"}) {
+        // when
+        auto timeline = sequencer.timeline({{name, -1.0f, 0.0f}});
+
+        // then: samples at 0, 1/60 and 2/60 s, then the last frame at 0.04 s,
+        // not wrapped toward the first when the clip loops
+        ASSERT_EQ(4ll, timeline.size()) << name;
+        expectSamePose(frame0, timeline[0]);
+        expectSamePose(JaRetargeter::blend(frame0, frame1, 50.0f / 60.0f), timeline[1]);
+        expectSamePose(JaRetargeter::blend(frame1, frame2, 40.0f / 60.0f), timeline[2]);
+        expectSamePose(frame2, timeline[3]);
+    }
+
+    // and the next step blends from that last frame
+    auto timeline = sequencer.timeline({{"ODD", -1.0f, 0.0f}, {"BIND", 0.05f, 0.05f}});
+    ASSERT_EQ(7ll, timeline.size());
+    expectSamePose(JaRetargeter::blend(frame2, frame0, 1.0f / 3.0f), timeline[5]);
 }
 
 TEST(JaSequencer, should_pose_a_model_scene_node_through_the_engine_animation_path) {
@@ -534,20 +682,25 @@ TEST(JaRetargeterOnGameFiles, should_play_a_swing_and_a_block_on_a_kotor_body) {
             moveClips.insert(step.clip);
         }
     }
+    // Each error is checked before it is kept: std::max would drop a NaN.
     for (auto &name : moveClips) {
         const auto &clip = sequencer.clip(name);
         for (int frame = clip.firstFrame; frame < clip.firstFrame + clip.numFrames; ++frame) {
             auto kotor = retargeter.transforms(retargeter.pose(frame));
             auto ja = gla->boneTransforms(frame);
-            worstBlade = std::max(worstBlade, angleBetween(glm::vec3(kotor[weapon][2]), retargeter.bladeDirection(frame)));
+            float bladeError = angleBetween(glm::vec3(kotor[weapon][2]), retargeter.bladeDirection(frame));
+            ASSERT_TRUE(std::isfinite(bladeError)) << name << " frame " << frame;
+            worstBlade = std::max(worstBlade, bladeError);
             for (auto &mapping : JaRetargeter::boneMappings()) {
                 if (!*mapping.kotorChild) {
                     continue;
                 }
                 glm::vec3 kotorDirection(kotor[retargeter.nodeIndex(mapping.kotorChild)][3] - kotor[retargeter.nodeIndex(mapping.kotor)][3]);
                 glm::vec3 jaDirection(toKotorAxes(glm::vec3(ja[gla->boneIndex(mapping.jaChild)][3] - ja[gla->boneIndex(mapping.ja)][3])));
+                float boneError = angleBetween(kotorDirection, jaDirection);
+                ASSERT_TRUE(std::isfinite(boneError)) << mapping.kotor << " in " << name << " frame " << frame;
                 float &worst = worstBone[mapping.kotor];
-                worst = std::max(worst, angleBetween(kotorDirection, jaDirection));
+                worst = std::max(worst, boneError);
             }
         }
     }
@@ -557,6 +710,53 @@ TEST(JaRetargeterOnGameFiles, should_play_a_swing_and_a_block_on_a_kotor_body) {
         std::cout << "worst " << name << " direction error " << worst / kDegree << " degrees" << std::endl;
         EXPECT_LT(worst, 1.0f * kDegree) << name;
     }
+
+    // Every frame of the GLA, not only the moves': a finite pose (pose()
+    // throws otherwise), the blade on the tag, and the hand turning from frame
+    // to frame exactly as the tag turns, even where the blade points along the
+    // forearm.
+    float worstAnyBlade = 0.0f;
+    float worstTurn = 0.0f;
+    std::set<int> alongForearm;
+    float nearestToForearm = glm::pi<float>();
+    glm::mat3 previousWeapon(1.0f);
+    glm::mat3 previousTag(1.0f);
+    for (int frame = 0; frame < gla->numFrames(); ++frame) {
+        glm::mat3 weaponRotation(retargeter.transforms(retargeter.pose(frame))[weapon]);
+        glm::mat3 tag(tagRotation(*gla, frame));
+        float bladeError = angleBetween(weaponRotation[2], retargeter.bladeDirection(frame));
+        ASSERT_TRUE(std::isfinite(bladeError)) << "frame " << frame;
+        worstAnyBlade = std::max(worstAnyBlade, bladeError);
+        if (frame > 0) {
+            float turnError = std::abs(rotationAngle(previousWeapon, weaponRotation) - rotationAngle(previousTag, tag));
+            ASSERT_TRUE(std::isfinite(turnError)) << "frame " << frame;
+            worstTurn = std::max(worstTurn, turnError);
+        }
+        previousWeapon = weaponRotation;
+        previousTag = tag;
+
+        auto ja = gla->boneTransforms(frame);
+        glm::vec3 forearm(ja[gla->boneIndex("rradius")][3] - ja[gla->boneIndex("rhand")][3]);
+        float offLine = angleBetween(forearm, glm::vec3(ja[gla->boneIndex(JaRetargeter::kSaberTagBone)][2]));
+        offLine = std::min(offLine, glm::pi<float>() - offLine);
+        nearestToForearm = std::min(nearestToForearm, offLine);
+        if (offLine < 15.0f * kDegree) {
+            alongForearm.insert(frame);
+        }
+    }
+    int clipsAlongForearm = 0;
+    for (auto &[_, clip] : clips) {
+        auto first = alongForearm.lower_bound(clip.firstFrame);
+        if (first != alongForearm.end() && *first < clip.firstFrame + clip.numFrames) {
+            ++clipsAlongForearm;
+        }
+    }
+    std::cout << "all " << gla->numFrames() << " frames: worst blade error " << worstAnyBlade / kDegree
+              << " degrees; worst difference between hand and tag turns from frame to frame " << worstTurn / kDegree
+              << " degrees; blade within 15 degrees of the forearm's line in " << alongForearm.size() << " frames of "
+              << clipsAlongForearm << " clips, nearest " << nearestToForearm / kDegree << " degrees" << std::endl;
+    EXPECT_LT(worstAnyBlade, 0.05f * kDegree);
+    EXPECT_LT(worstTurn, 0.01f * kDegree);
 
     // Through the engine: play each move on a model scene node of the body's
     // skeleton and record every node 100 times a second.
@@ -617,7 +817,9 @@ TEST(JaRetargeterOnGameFiles, should_play_a_swing_and_a_block_on_a_kotor_body) {
                 auto expected = retargeter.transforms(timeline[static_cast<size_t>(std::lround(sample))]);
                 for (size_t i = 0; i < retargeter.nodes().size(); ++i) {
                     auto sceneNode = modelSceneNode->getNodeByName(retargeter.nodes()[i].name);
-                    worstEngine = std::max(worstEngine, glm::distance(glm::vec3(expected[i][3]), glm::vec3(sceneNode->absoluteTransform()[3])));
+                    float error = glm::distance(glm::vec3(expected[i][3]), glm::vec3(sceneNode->absoluteTransform()[3]));
+                    ASSERT_TRUE(std::isfinite(error)) << move << " " << retargeter.nodes()[i].name << " at " << time << " s";
+                    worstEngine = std::max(worstEngine, error);
                 }
             }
             if (dump.is_open()) {
