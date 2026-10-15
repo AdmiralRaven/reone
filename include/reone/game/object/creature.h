@@ -213,6 +213,15 @@ public:
     void resumeStateDrivenAnimation();
 
     /**
+     * While the animation is held, the creature's own state (standing,
+     * moving, talking, dying) no longer picks its animations, and the
+     * playAnimation calls play nothing: the holder drives the model scene node
+     * itself. Letting go hands the model back to the state.
+     */
+    void holdAnimation(bool hold);
+    bool isAnimationHeld() const { return _animationHeld; }
+
+    /**
      * Play an animation as a layer over whatever the creature is already doing,
      * including while it is walking or running. Unlike the other playAnimation
      * overloads this neither waits for the creature to stand still nor takes
@@ -323,6 +332,9 @@ public:
 
     void activateCombat();
     void deactivateCombat(float delay);
+
+    /** Turns the lightsabers in the creature's hands on or off, with their sounds, and cancels an idle power-down. */
+    void setLightsabersOn(bool on);
 
     bool isInCombat() const { return _combatState.active; }
     bool isDebilitated() const;
@@ -561,6 +573,7 @@ private:
 
     bool _animDirty {true};
     bool _animFireForget {false};
+    bool _animationHeld {false};
     std::shared_ptr<graphics::LipAnimation> _lipAnimation;
 
     // END Animation

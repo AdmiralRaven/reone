@@ -20,6 +20,7 @@
 #include "reone/game/console.h"
 #include "reone/game/game.h"
 #include "reone/game/jaretarget.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/object/area.h"
 #include "reone/game/object/camera/firstperson.h"
 #include "reone/game/object/creature.h"
@@ -27,7 +28,6 @@
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
 #include "reone/graphics/animation.h"
-#include "reone/graphics/format/glareader.h"
 #include "reone/graphics/ghoulanimation.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/types.h"
@@ -36,7 +36,6 @@
 #include "reone/scene/types.h"
 #include "reone/system/cast.h"
 #include "reone/system/logutil.h"
-#include "reone/system/stream/fileinput.h"
 
 using namespace reone::graphics;
 using namespace reone::scene;
@@ -64,27 +63,19 @@ public:
     void saber(const ConsoleArgs &args);
     void camera(const ConsoleArgs &args);
     void list(const ConsoleArgs &args);
+    void saberMode(const ConsoleArgs &args);
+    void input(const ConsoleArgs &args);
+    void turn(const ConsoleArgs &args);
+    void mouse(const ConsoleArgs &args);
 
 private:
-    struct Body {
-        std::unique_ptr<JaRetargeter> retargeter;
-        std::unique_ptr<JaSequencer> sequencer;
-        std::map<std::string, std::shared_ptr<Animation>> animations;
-    };
-
     Game &_game;
     IConsole &_console;
 
-    std::shared_ptr<GhoulAnimation> _gla;
-    std::map<std::string, GhoulAnimationClip> _clips;
-    std::map<std::string, Body> _bodies;
-
-    // Model scene nodes keep plain references to the animations they play, so
-    // every animation built here lives as long as the game.
-    std::vector<std::shared_ptr<Animation>> _built;
+    JaSaber &saberControl() { return _game.jaSaber(); }
+    JaLibrary &library() { return _game.jaSaber().library(); }
 
     std::shared_ptr<Creature> targetCreature();
-    Body &body(const Model &model);
     std::vector<JaSequenceStep> steps(const std::string &move, const JaSequencer &sequencer) const;
     void print(const std::string &line);
 };
@@ -98,21 +89,6 @@ std::string joinArgs(const ConsoleArgs &args, size_t first) {
         result += std::string(*args[i]);
     }
     return result;
-}
-
-std::filesystem::path findFile(const std::filesystem::path &folder, const std::string &name) {
-    auto path = folder / name;
-    if (std::filesystem::is_regular_file(path)) {
-        return path;
-    }
-    if (std::filesystem::is_directory(folder)) {
-        for (auto &entry : std::filesystem::directory_iterator(folder)) {
-            if (entry.is_regular_file() && boost::iequals(entry.path().filename().string(), name)) {
-                return entry.path();
-            }
-        }
-    }
-    throw std::runtime_error("Not found: " + path.string());
 }
 
 std::string describeSteps(const std::vector<JaSequenceStep> &steps) {
@@ -146,17 +122,6 @@ std::shared_ptr<Creature> JaConsole::targetCreature() {
     throw std::runtime_error("No party leader");
 }
 
-JaConsole::Body &JaConsole::body(const Model &model) {
-    auto it = _bodies.find(model.name());
-    if (it != _bodies.end()) {
-        return it->second;
-    }
-    Body body;
-    body.retargeter = std::make_unique<JaRetargeter>(*_gla, model);
-    body.sequencer = std::make_unique<JaSequencer>(*body.retargeter, _clips);
-    return _bodies.insert({model.name(), std::move(body)}).first->second;
-}
-
 std::vector<JaSequenceStep> JaConsole::steps(const std::string &move, const JaSequencer &sequencer) const {
     auto named = jaNamedMove(move);
     if (!named.empty()) {
@@ -177,38 +142,12 @@ void JaConsole::load(const ConsoleArgs &args) {
     if (args.size() < 2) {
         throw std::runtime_error("Usage: jaload <folder with _humanoid.gla and animation.cfg>");
     }
-    std::filesystem::path folder(joinArgs(args, 1));
-    std::filesystem::path glaPath;
-    if (std::filesystem::is_regular_file(folder)) {
-        glaPath = folder;
-        folder = folder.parent_path();
-    } else {
-        glaPath = findFile(folder, "_humanoid.gla");
-    }
-    auto cfgPath = findFile(folder, "animation.cfg");
-
-    FileInputStream glaStream(glaPath);
-    GlaReader reader(glaStream);
-    reader.load();
-
-    std::ifstream cfgStream(cfgPath);
-    std::stringstream cfgText;
-    cfgText << cfgStream.rdbuf();
-    auto clips = parseGhoulAnimationConfig(cfgText.str());
-    if (clips.empty()) {
-        throw std::runtime_error("No animations in " + cfgPath.string());
-    }
-
-    for (auto &[_, body] : _bodies) {
-        for (auto &[_, animation] : body.animations) {
-            _built.push_back(animation);
-        }
-    }
-    _bodies.clear();
-    _gla = reader.animation();
-    _clips = std::move(clips);
+    // Saber mode plays from the bodies a reload drops.
+    saberControl().leave();
+    library().load(std::filesystem::path(joinArgs(args, 1)));
+    const auto &gla = library().gla();
     print(str(boost::format("jaload: %s, %d bones, %d frames, %d clips") %
-              _gla->name() % _gla->numBones() % _gla->numFrames() % _clips.size()));
+              gla.name() % gla.numBones() % gla.numFrames() % library().clips().size()));
 }
 
 void JaConsole::loadSave(const ConsoleArgs &args) {
@@ -238,7 +177,7 @@ void JaConsole::loadSave(const ConsoleArgs &args) {
 }
 
 void JaConsole::play(const ConsoleArgs &args) {
-    if (!_gla) {
+    if (!library().isLoaded()) {
         throw std::runtime_error("Run jaload <folder> first");
     }
     if (args.size() < 2 || args.size() > 3) {
@@ -255,16 +194,19 @@ void JaConsole::play(const ConsoleArgs &args) {
     }
 
     auto creature = targetCreature();
+    if (saberControl().isActive()) {
+        throw std::runtime_error("Saber mode is on; X puts the saber away first");
+    }
     auto model = std::dynamic_pointer_cast<ModelSceneNode>(creature->sceneNode());
     if (!model) {
         throw std::runtime_error("The creature has no model");
     }
-    Body &entry = body(model->model());
+    JaLibrary::Body &entry = library().body(model->model());
     auto sequence = steps(move, *entry.sequencer);
     auto &animation = entry.animations["ja_" + move];
     if (!animation) {
         animation = entry.sequencer->animation("ja_" + move, sequence, kTransitionTime);
-        _built.push_back(animation);
+        library().keepAlive(animation);
     }
 
     if (model->activeAnimationName() == animation->name() && !model->isAnimationFinished()) {
@@ -358,13 +300,13 @@ void JaConsole::camera(const ConsoleArgs &args) {
 }
 
 void JaConsole::list(const ConsoleArgs &args) {
-    if (!_gla) {
+    if (!library().isLoaded()) {
         throw std::runtime_error("Run jaload <folder> first");
     }
     std::string filter(boost::to_upper_copy(joinArgs(args, 1)));
     int shown = 0;
     int matched = 0;
-    for (auto &[name, clip] : _clips) {
+    for (auto &[name, clip] : library().clips()) {
         if (!filter.empty() && name.find(filter) == std::string::npos) {
             continue;
         }
@@ -376,6 +318,81 @@ void JaConsole::list(const ConsoleArgs &args) {
         }
     }
     _console.printLine(str(boost::format("jalist: %d clips match") % matched));
+}
+
+void JaConsole::saberMode(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jasabermode [on|off]");
+    }
+    bool on = !saberControl().isActive();
+    if (args.size() == 2) {
+        std::string value(boost::to_lower_copy(std::string(*args[1])));
+        if (value != "on" && value != "off") {
+            throw std::runtime_error("Usage: jasabermode [on|off]");
+        }
+        on = value == "on";
+    }
+    if (on) {
+        saberControl().enter();
+    } else {
+        saberControl().leave();
+    }
+}
+
+void JaConsole::input(const ConsoleArgs &args) {
+    if (args.size() == 2 && boost::iequals(std::string(*args[1]), "off")) {
+        saberControl().setScriptedInput(std::nullopt);
+        print("jainput: the keyboard and mouse again");
+        return;
+    }
+    JaSaberInput input;
+    std::vector<std::string> held;
+    for (size_t i = 1; i < args.size(); ++i) {
+        std::string word(boost::to_lower_copy(std::string(*args[i])));
+        if (word == "attack") {
+            input.attack = true;
+        } else if (word == "forward") {
+            input.forward = 1;
+        } else if (word == "back") {
+            input.forward = -1;
+        } else if (word == "left") {
+            input.right = -1;
+        } else if (word == "right") {
+            input.right = 1;
+        } else {
+            throw std::runtime_error("Usage: jainput [attack] [forward|back] [left|right], or jainput off");
+        }
+        held.push_back(word);
+    }
+    saberControl().setScriptedInput(input);
+    print("jainput: holding " + (held.empty() ? std::string("nothing") : boost::join(held, " ")));
+}
+
+void JaConsole::turn(const ConsoleArgs &args) {
+    auto degrees = args.get<float>(1);
+    if (args.size() != 2 || !degrees) {
+        throw std::runtime_error("Usage: jaturn <degrees to the left>");
+    }
+    if (!_game.module() || !_game.module()->area()) {
+        throw std::runtime_error("Load a game first");
+    }
+    saberControl().turn(glm::radians(*degrees));
+    print(str(boost::format("jaturn: %g degrees") % *degrees));
+}
+
+void JaConsole::mouse(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jamouse [radians per unit of mouse movement]");
+    }
+    if (args.size() == 2) {
+        auto value = args.get<float>(1);
+        if (!value || *value <= 0.0f) {
+            throw std::runtime_error("The turn must be a positive number");
+        }
+        saberControl().setMouseTurn(*value);
+    }
+    print(str(boost::format("jamouse: %g radians per unit (%g by default)") %
+              saberControl().mouseTurn() % JaSaber::kDefaultMouseTurn));
 }
 
 void registerJaConsoleCommands(Game &game, IConsole &console) {
@@ -404,6 +421,14 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jacam", &JaConsole::camera));
     console.registerCommand("jalist", "list Jedi Academy animations: jalist [text]",
                             logged("jalist", &JaConsole::list));
+    console.registerCommand("jasabermode", "start or end Jedi Academy saber mode, as X does: jasabermode [on|off]",
+                            logged("jasabermode", &JaConsole::saberMode));
+    console.registerCommand("jainput", "hold saber mode input for scripted runs: jainput [attack] [forward|back] [left|right], or jainput off",
+                            logged("jainput", &JaConsole::input));
+    console.registerCommand("jaturn", "turn the camera, and in saber mode the character, to the left: jaturn <degrees>",
+                            logged("jaturn", &JaConsole::turn));
+    console.registerCommand("jamouse", "show or set saber mode's mouse turn: jamouse [radians per unit]",
+                            logged("jamouse", &JaConsole::mouse));
 }
 
 } // namespace game

@@ -828,7 +828,7 @@ void Creature::update(float dt) {
 
 void Creature::updateModelAnimation() {
     auto model = std::static_pointer_cast<ModelSceneNode>(_sceneNode);
-    if (!model)
+    if (!model || _animationHeld)
         return;
 
     if (_animFireForget) {
@@ -1083,7 +1083,7 @@ void Creature::playAnimation(const std::string &name, AnimationProperties proper
 }
 
 bool Creature::doPlayAnimation(bool fireForget, const std::function<void()> &callback) {
-    if (!_sceneNode || _movementType != MovementType::None) {
+    if (!_sceneNode || _animationHeld || _movementType != MovementType::None) {
         return false;
     }
 
@@ -1124,6 +1124,9 @@ bool Creature::playExternalAnimation(const std::shared_ptr<Animation> &anim, Ani
 }
 
 void Creature::playOverlayAnimation(AnimationType type) {
+    if (_animationHeld) {
+        return;
+    }
     std::string animName(getAnimationName(type));
     if (animName.empty()) {
         return;
@@ -1151,6 +1154,16 @@ void Creature::resumeStateDrivenAnimation() {
     _animFireForget = false;
     _animDirty = true;
     updateModelAnimation();
+}
+
+void Creature::holdAnimation(bool hold) {
+    if (_animationHeld == hold) {
+        return;
+    }
+    _animationHeld = hold;
+    if (!hold) {
+        resumeStateDrivenAnimation();
+    }
 }
 
 void Creature::playAnimation(CombatAnimation anim, CreatureWieldType wield, int variant) {
@@ -1607,6 +1620,11 @@ void Creature::activateCombat() {
     _combatState.shouldDeactivate = false;
     _animDirty = true;
     setLightsabersPowered(true, true);
+}
+
+void Creature::setLightsabersOn(bool on) {
+    _lightsaberIdlePowerDownPending = false;
+    setLightsabersPowered(on, true);
 }
 
 void Creature::setLightsabersPowered(bool powered, bool animate) {

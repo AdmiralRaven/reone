@@ -41,6 +41,7 @@
 #include "reone/game/gui/hud.h"
 #include "reone/game/gui/sounds.h"
 #include "reone/game/jaconsole.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/location.h"
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
@@ -749,6 +750,10 @@ bool Game::handle(const input::Event &event) {
     }
 
     if (!_movie) {
+        // Saber mode takes its keys and the mouse before the HUD does.
+        if (_screen == Screen::InGame && _cameraType == CameraType::ThirdPerson && jaSaber().handle(event)) {
+            return true;
+        }
         auto gui = getScreenGUI();
         if (gui && gui->handle(event)) {
             return true;
@@ -865,6 +870,8 @@ void Game::update(float frameTime) {
             finishTurretLifecycle(_turret.outcome());
         }
     }
+
+    jaSaber().updateMouse();
 
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
     if (updModule && !_paused) {
@@ -3981,6 +3988,13 @@ void Game::setPaused(bool paused) {
 
 void Game::setRelativeMouseMode(bool relative) {
     _relativeMouseMode = relative;
+}
+
+JaSaber &Game::jaSaber() {
+    if (!_jaSaber) {
+        _jaSaber = std::make_shared<JaSaber>(*this, _console);
+    }
+    return *_jaSaber;
 }
 
 void Game::withLoadingScreen(const std::string &imageResRef, const std::function<void()> &block) {

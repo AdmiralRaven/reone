@@ -125,6 +125,7 @@ struct SavedObjectReference;
 struct SerializedScriptSituation;
 class SavedScriptContinuation;
 class ModuleSnapshotBuilder;
+class JaSaber;
 
 class Game : boost::noncopyable {
 public:
@@ -197,6 +198,9 @@ public:
     OptionsView &options() { return _options; }
     const OptionsView &options() const { return _options; }
     Party &party() { return _party; }
+
+    /** Jedi Academy saber mode and the JA animations it plays. */
+    JaSaber &jaSaber();
     Combat &combat() { return _combat; }
     Journal &journal() { return _journal; }
     MessageLog &messageLog() { return _messageLog; }
@@ -874,6 +878,7 @@ private:
     std::shared_ptr<movie::IMovie> _movie;
     std::queue<std::string> _moduleTransitionMovies;
     std::shared_ptr<PresentationPointer> _pointer;
+    std::shared_ptr<JaSaber> _jaSaber;
     float _gameSpeed {1.0f};
     CameraType _cameraType {CameraType::ThirdPerson};
     CameraType _savedCameraType {CameraType::ThirdPerson};

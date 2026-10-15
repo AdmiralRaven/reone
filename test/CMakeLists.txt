@@ -29,6 +29,7 @@ set(TESTS_HEADERS
     ${TESTS_SOURCE_DIR}/fixtures/engine.h
     ${TESTS_SOURCE_DIR}/fixtures/game.h
     ${TESTS_SOURCE_DIR}/fixtures/gla.h
+    ${TESTS_SOURCE_DIR}/fixtures/jabody.h
     ${TESTS_SOURCE_DIR}/fixtures/graphics.h
     ${TESTS_SOURCE_DIR}/fixtures/gui.h
     ${TESTS_SOURCE_DIR}/fixtures/itempresentation.h
@@ -72,8 +73,10 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/game/saveprovenance.cpp
     ${TESTS_SOURCE_DIR}/game/savedsituation.cpp
     ${TESTS_SOURCE_DIR}/game/journal.cpp
+    ${TESTS_SOURCE_DIR}/game/jaanimator.cpp
     ${TESTS_SOURCE_DIR}/game/jaconsole.cpp
     ${TESTS_SOURCE_DIR}/game/jaretarget.cpp
+    ${TESTS_SOURCE_DIR}/game/jasabermoves.cpp
     ${TESTS_SOURCE_DIR}/game/messagebus.cpp
     ${TESTS_SOURCE_DIR}/game/minigame.cpp
     ${TESTS_SOURCE_DIR}/game/modulename.cpp

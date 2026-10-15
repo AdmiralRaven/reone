@@ -37,7 +37,16 @@ class IConsole;
  * - jasaber [off]: put a lightsaber in its right hand, if it has none, and
  *   ignite it (or put it out);
  * - jacam [distance] [angle] [height]: aim the free camera at it;
- * - jalist [text]: list the clips whose names contain the text.
+ * - jalist [text]: list the clips whose names contain the text;
+ * - jasabermode [on|off]: start or end saber mode (see JaSaber), as X does;
+ * - jainput [attack] [forward|back] [left|right], or jainput off: hold that
+ *   input in saber mode in place of the keyboard and mouse, for scripted runs;
+ * - jaturn <degrees>: turn the camera, and in saber mode the character, to
+ *   the left;
+ * - jamouse [radians]: show or set how far saber mode turns per unit of
+ *   mouse movement.
+ *
+ * The JA animations are those of Game::jaSaber()'s library.
  */
 void registerJaConsoleCommands(Game &game, IConsole &console);
 

@@ -23,6 +23,7 @@
 #include "reone/game/action/startconversation.h"
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/party.h"
 #include "reone/game/script/savedsituation.h"
 #include "reone/game/reputes.h"
@@ -596,7 +597,8 @@ void Module::update(float dt) {
     Object::update(dt);
     dispatchDueSavedEvents();
 
-    if (_game.cameraType() == CameraType::ThirdPerson) {
+    // In saber mode Jedi Academy's controls drive the party leader instead.
+    if (_game.cameraType() == CameraType::ThirdPerson && !_game.jaSaber().update(dt)) {
         _player->update(dt);
     }
     _area->update(dt);
