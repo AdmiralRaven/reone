@@ -537,10 +537,13 @@ TEST(JaSaberDriverOnGameFiles, should_play_saber_mode_on_a_kotor_body) {
 
         std::ofstream poses;
         std::ofstream events;
+        std::ofstream states;
         if (dumpDir) {
             poses.open(std::filesystem::path(dumpDir) / (scenario.name + ".txt"));
             poses << std::setprecision(9);
             events.open(std::filesystem::path(dumpDir) / (scenario.name + "_moves.txt"));
+            states.open(std::filesystem::path(dumpDir) / (scenario.name + "_ticks.txt"));
+            states << std::setprecision(6);
         }
         std::vector<std::string> started;
         float worstStep = 0.0f;
@@ -558,6 +561,12 @@ TEST(JaSaberDriverOnGameFiles, should_play_saber_mode_on_a_kotor_body) {
                 if (events.is_open()) {
                     events << t << " " << moves.move(move).name << " " << moves.move(move).clip << "\n";
                 }
+            }
+            if (states.is_open()) {
+                const auto &animator = driver.animator();
+                states << t << " " << moves.move(driver.machine().move()).name << " " << step.moving << " "
+                       << glm::degrees(driver.legsYaw()) << " " << animator.clip(JaBodyAnimator::kLegs) << " "
+                       << animator.clip(JaBodyAnimator::kTorso) << "\n";
             }
             auto pose = driver.pose();
             for (auto &q : pose.orientations) {

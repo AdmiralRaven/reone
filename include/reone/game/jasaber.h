@@ -105,7 +105,7 @@ private:
  */
 class JaSaber : boost::noncopyable {
 public:
-    /** Radians the camera turns per unit of mouse movement: about Jedi Academy's default. */
+    /** Radians the camera turns per unit of mouse movement; reone's own mouse look turns 0.001. */
     static constexpr float kDefaultMouseTurn = 0.0019f;
 
     JaSaber(Game &game, IConsole &console) :

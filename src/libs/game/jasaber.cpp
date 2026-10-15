@@ -341,7 +341,8 @@ std::string JaSaber::whyNotInPlay(const std::shared_ptr<Creature> &creature) con
     if (!creature) {
         return "the character is gone";
     }
-    if (_game.module() != _module.lock()) {
+    auto module = _game.module();
+    if (!module || !module->area() || module != _module.lock()) {
         return "a new area";
     }
     if (_game.party().getLeader() != creature) {
