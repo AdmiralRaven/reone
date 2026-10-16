@@ -20,6 +20,7 @@
 #include "reone/input/event.h"
 
 #include "jaanimator.h"
+#include "jacamera.h"
 #include "jasabermoves.h"
 
 namespace reone {
@@ -36,6 +37,7 @@ class Creature;
 class Game;
 class IConsole;
 class Module;
+class ThirdPersonCamera;
 
 /** Jedi Academy's animations from the player's own files, and the KOTOR bodies they pose. */
 class JaLibrary : boost::noncopyable {
@@ -87,7 +89,10 @@ private:
  * way Jedi Academy's single-player player does, in the fast style.
  *
  * - The character stands in the fast ready stance and faces where the camera
- *   looks; the mouse turns the camera.
+ *   looks. Moving the mouse sideways turns the view; moving it forward and
+ *   back tilts it, as far as JA lets its player look, 75 degrees up or down.
+ * - The camera is Jedi Academy's third-person camera (JaCamera), scaled to
+ *   the character. V switches it to a view over the right shoulder, and back.
  * - W, S, A and D (or Z and C) move it forward, back and sideways, and B or
  *   Shift walks, with Jedi Academy's saber-out walks and runs. Moving
  *   sideways, the legs turn toward the movement while the torso keeps
@@ -108,7 +113,11 @@ private:
  */
 class JaSaber : boost::noncopyable {
 public:
-    /** Radians the camera turns per unit of mouse movement; reone's own mouse look turns 0.001. */
+    /**
+     * Radians the view turns, and tilts, per unit of mouse movement: JA's
+     * 0.022 degrees (m_yaw and m_pitch) at its default sensitivity, 5.
+     * reone's own mouse look turns 0.001.
+     */
     static constexpr float kDefaultMouseTurn = 0.0019f;
 
     JaSaber(Game &game, IConsole &console) :
@@ -170,6 +179,21 @@ public:
     /** Turns the camera, and so the character, by \p radians, positive to the left. */
     void turn(float radians);
 
+    /** How far the view tilts, in radians; positive looks down. */
+    float pitch() const { return _pitch; }
+
+    /** Tilts the view by \p radians, positive down, within JA's 75 degrees either way. */
+    void look(float radians);
+
+    /** Whether the camera looks over the right shoulder rather than from straight behind. */
+    bool shoulderView() const { return _shoulder; }
+
+    /** Puts the camera over the right shoulder, or back behind; kept for the next time saber mode starts. */
+    void setShoulderView(bool shoulder);
+
+    /** Saber mode's camera; none while saber mode is off. */
+    const JaCamera *camera() const { return _view ? &*_view : nullptr; }
+
     float mouseTurn() const { return _mouseTurn; }
     void setMouseTurn(float radiansPerUnit) { _mouseTurn = radiansPerUnit; }
 
@@ -205,6 +229,9 @@ private:
     std::optional<JaSaberInput> _scripted;
     float _mouseTurn {kDefaultMouseTurn};
     float _modeTime {0.0f};
+    float _pitch {0.0f};
+    bool _shoulder {false};
+    std::optional<JaCamera> _view;
 
     JaSaberInput input() const;
     bool walking() const;
@@ -212,6 +239,10 @@ private:
     /** Why saber mode must end; empty when it can go on, in play or paused by a menu. */
     std::string whyNotInPlay(const std::shared_ptr<Creature> &creature) const;
     void showPose();
+    /** Moves saber mode's camera on by \p dt and shows its view. */
+    void updateCamera(float dt);
+    /** The third-person camera of the area saber mode started in. */
+    ThirdPersonCamera *thirdPersonCamera() const;
     void print(const std::string &line);
 };
 

@@ -159,30 +159,38 @@ void ThirdPersonCamera::update(float dt) {
 void ThirdPersonCamera::updateSceneNode() {
     static glm::vec3 up {0.0f, 0.0f, 1.0f};
 
-    glm::vec3 dir(
-        glm::sin(_facing),
-        -glm::cos(_facing),
-        0.0f);
+    View view;
+    if (_view) {
+        view = *_view;
+    } else {
+        glm::vec3 dir(
+            glm::sin(_facing),
+            -glm::cos(_facing),
+            0.0f);
 
-    glm::vec3 targetPos(_targetPosition);
-    targetPos += kTargetPadding * dir;
+        glm::vec3 targetPos(_targetPosition);
+        targetPos += kTargetPadding * dir;
 
-    glm::vec3 cameraPos(_targetPosition);
-    cameraPos += _style.distance * dir;
-    cameraPos.z += _style.height;
+        glm::vec3 cameraPos(_targetPosition);
+        cameraPos += _style.distance * dir;
+        cameraPos.z += _style.height;
 
-    Collision collision;
-    auto &scene = _services.scene.graphs.get(_sceneName);
-    if (scene.testLineOfSight(targetPos, cameraPos, collision)) {
-        cameraPos = collision.intersection;
+        Collision collision;
+        auto &scene = _services.scene.graphs.get(_sceneName);
+        if (scene.testLineOfSight(targetPos, cameraPos, collision)) {
+            cameraPos = collision.intersection;
+        }
+        view.eye = cameraPos;
+        view.aim = targetPos;
     }
 
-    glm::quat orientation(glm::quatLookAt(glm::normalize(targetPos - cameraPos), up));
+    glm::quat orientation(glm::quatLookAt(glm::normalize(view.aim - view.eye), up));
 
     glm::mat4 transform(1.0f);
-    transform *= glm::translate(cameraPos);
+    transform *= glm::translate(view.eye);
     transform *= glm::mat4_cast(orientation);
     _sceneNode->setLocalTransform(std::move(transform));
+    _shown = view;
 }
 
 void ThirdPersonCamera::stopMovement() {
@@ -204,6 +212,23 @@ void ThirdPersonCamera::setFacing(float facing) {
 void ThirdPersonCamera::setStyle(CameraStyle style) {
     _style = std::move(style);
     updateSceneNode();
+}
+
+void ThirdPersonCamera::setView(std::optional<View> view) {
+    _view = std::move(view);
+    updateSceneNode();
+}
+
+std::optional<float> ThirdPersonCamera::obstruction(const glm::vec3 &from, const glm::vec3 &to) const {
+    if (glm::distance(from, to) < 1e-4f) {
+        return std::nullopt;
+    }
+    Collision collision;
+    auto &scene = _services.scene.graphs.get(_sceneName);
+    if (!scene.testLineOfSight(from, to, collision)) {
+        return std::nullopt;
+    }
+    return glm::distance(from, collision.intersection);
 }
 
 } // namespace game

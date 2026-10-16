@@ -53,8 +53,31 @@ public:
     void setFacing(float facing);
     void setStyle(CameraStyle style);
 
+    /** Where the camera stands and a point it looks at. */
+    struct View {
+        glm::vec3 eye {0.0f};
+        glm::vec3 aim {0.0f, 1.0f, 0.0f};
+    };
+
+    /**
+     * Shows \p view in place of KOTOR's own, which follows the party leader
+     * at the area's camera style, until set to none.
+     */
+    void setView(std::optional<View> view);
+
+    /** The view shown last. */
+    const View &shownView() const { return _shown; }
+
+    /**
+     * How far from \p from toward \p to a line first meets what this camera
+     * keeps out of, as it tests its own view; none when the way is clear.
+     */
+    std::optional<float> obstruction(const glm::vec3 &from, const glm::vec3 &to) const;
+
 private:
     CameraStyle _style;
+    std::optional<View> _view;
+    View _shown;
 
     glm::vec3 _targetPosition {0.0f};
     bool _rotateCCW {false};

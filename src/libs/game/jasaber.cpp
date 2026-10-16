@@ -44,6 +44,28 @@ namespace game {
 
 static constexpr const char *kWeaponNode = "rhand";
 
+// JA's player stands 64 units tall: DEFAULT_MINS_2 -24 to DEFAULT_MAXS_2 40.
+static constexpr float kJaPlayerHeight = 64.0f;
+
+// pmbbl's camera hook stands this high, in metres.
+static constexpr float kFallbackEyeHeight = 1.68f;
+
+// The character's eyes above its feet: the camera hook reone's own camera
+// aims at, or else JA's proportion of the model's height.
+static float eyeHeight(const ModelSceneNode &model) {
+    if (auto hook = model.model().getNodeByName("camerahook")) {
+        float height = hook->absoluteTransform()[3].z;
+        if (height > 0.1f) {
+            return height;
+        }
+    }
+    float top = model.model().aabb().max().z;
+    if (top > 0.1f) {
+        return top * JaCamera::kJaEyeHeight / kJaPlayerHeight;
+    }
+    return kFallbackEyeHeight;
+}
+
 static std::filesystem::path findFile(const std::filesystem::path &folder, const std::string &name) {
     auto path = folder / name;
     if (std::filesystem::is_regular_file(path)) {
@@ -191,6 +213,16 @@ void JaSaber::enter() {
     leader->clearAllActions();
     camera->setFacing(leader->getFacing());
     driver->start(jaCurrentPose(*body.retargeter, *model));
+
+    // JA's camera glides in from KOTOR's view, tilted as KOTOR's looks.
+    const ThirdPersonCamera::View &shown = camera->shownView();
+    JaCamera view(eyeHeight(*model));
+    view.start(shown.eye, shown.aim, camera->facing());
+    glm::vec3 look(shown.aim - shown.eye);
+    float pitch = 0.0f;
+    if (glm::length(look) > 1e-4f) {
+        pitch = -std::asin(glm::clamp(glm::normalize(look).z, -1.0f, 1.0f));
+    }
     leader->holdAnimation(true);
     leader->setLightsabersOn(true);
 
@@ -201,6 +233,8 @@ void JaSaber::enter() {
     _driver = std::move(driver);
     _keys = Keys();
     _modeTime = 0.0f;
+    _pitch = glm::clamp(pitch, -JaCamera::kMaxViewPitch, JaCamera::kMaxViewPitch);
+    _view = view;
     _active = true;
     showPose();
     _game.setRelativeMouseMode(true);
@@ -227,6 +261,11 @@ void JaSaber::leave(const std::string &reason) {
         _game.setRelativeMouseMode(false);
     }
     _capturedMouse = false;
+    // KOTOR's camera takes over again, facing the same way.
+    if (auto *camera = thirdPersonCamera()) {
+        camera->setView(std::nullopt);
+    }
+    _view.reset();
     _driver.reset();
     _model = nullptr;
     _body = nullptr;
@@ -255,7 +294,9 @@ bool JaSaber::handle(const input::Event &event) {
     case input::EventType::KeyUp:
         return handleKey(event.key);
     case input::EventType::MouseMotion:
+        // Like JA's own mouse look, not inverted: toward you looks down.
         turn(-_mouseTurn * event.motion.xrel);
+        look(_mouseTurn * event.motion.yrel);
         return true;
     case input::EventType::MouseButtonDown:
     case input::EventType::MouseButtonUp:
@@ -302,24 +343,65 @@ bool JaSaber::handleKey(const input::KeyEvent &event) {
             leave();
         }
         return true;
+    case input::KeyCode::V:
+        if (down && !event.repeat) {
+            setShoulderView(!_shoulder);
+        }
+        return true;
     default:
         return false;
     }
 }
 
 JaSaberInput JaSaber::input() const {
-    if (_scripted) {
-        return *_scripted;
-    }
     JaSaberInput result;
-    result.attack = _keys.attack;
-    result.forward = (_keys.forward ? 1 : 0) - (_keys.back ? 1 : 0);
-    result.right = ((_keys.rightD || _keys.rightC) ? 1 : 0) - ((_keys.leftA || _keys.leftZ) ? 1 : 0);
+    if (_scripted) {
+        result = *_scripted;
+    } else {
+        result.attack = _keys.attack;
+        result.forward = (_keys.forward ? 1 : 0) - (_keys.back ? 1 : 0);
+        result.right = ((_keys.rightD || _keys.rightC) ? 1 : 0) - ((_keys.leftA || _keys.leftZ) ? 1 : 0);
+    }
+    // The view's tilt picks an attack too, as JA's view pitch does.
+    result.pitch = glm::degrees(_pitch);
     return result;
 }
 
 bool JaSaber::walking() const {
     return !_scripted && (_keys.walk || _keys.shiftWalk);
+}
+
+void JaSaber::look(float radians) {
+    _pitch = glm::clamp(_pitch + radians, -JaCamera::kMaxViewPitch, JaCamera::kMaxViewPitch);
+}
+
+void JaSaber::setShoulderView(bool shoulder) {
+    if (_shoulder == shoulder) {
+        return;
+    }
+    _shoulder = shoulder;
+    print(shoulder ? "jasaber: camera over the right shoulder" : "jasaber: camera behind");
+}
+
+ThirdPersonCamera *JaSaber::thirdPersonCamera() const {
+    auto module = _module.lock();
+    if (!module || !module->area()) {
+        return nullptr;
+    }
+    return module->area()->getCamera<ThirdPersonCamera>(CameraType::ThirdPerson);
+}
+
+void JaSaber::updateCamera(float dt) {
+    auto *camera = thirdPersonCamera();
+    auto creature = _creature.lock();
+    if (!camera || !creature || !_view) {
+        return;
+    }
+    // Damping carries the camera from one view to the other when V switches them.
+    const JaCamera::Settings settings(_shoulder ? JaCamera::Settings::shoulder() : JaCamera::Settings::behind());
+    _view->update(dt, creature->position(), camera->facing(), _pitch, settings,
+                  [camera](const glm::vec3 &from, const glm::vec3 &to) { return camera->obstruction(from, to); });
+    camera->setView(ThirdPersonCamera::View {_view->eye(), _view->aim()});
 }
 
 void JaSaber::turn(float radians) {
@@ -408,6 +490,8 @@ bool JaSaber::update(float dt) {
     }
     creature->setFacing(view + _driver->legsYaw());
     showPose();
+    // After the move, so the camera sees where the character is now.
+    updateCamera(dt);
     return true;
 }
 

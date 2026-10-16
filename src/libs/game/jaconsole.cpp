@@ -67,6 +67,10 @@ public:
     void input(const ConsoleArgs &args);
     void turn(const ConsoleArgs &args);
     void mouse(const ConsoleArgs &args);
+    void look(const ConsoleArgs &args);
+    void view(const ConsoleArgs &args);
+    void click(const ConsoleArgs &args);
+    void globals(const ConsoleArgs &args);
 
 private:
     Game &_game;
@@ -395,6 +399,102 @@ void JaConsole::mouse(const ConsoleArgs &args) {
               saberControl().mouseTurn() % JaSaber::kDefaultMouseTurn));
 }
 
+void JaConsole::look(const ConsoleArgs &args) {
+    auto degrees = args.get<float>(1);
+    if (args.size() != 2 || !degrees) {
+        throw std::runtime_error("Usage: jalook <degrees down; negative looks up>");
+    }
+    if (!saberControl().isActive()) {
+        throw std::runtime_error("Saber mode is off; jalook tilts its camera");
+    }
+    saberControl().look(glm::radians(*degrees));
+    print(str(boost::format("jalook: %g degrees, now %.1f down") % *degrees % glm::degrees(saberControl().pitch())));
+}
+
+void JaConsole::view(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jaview [behind|shoulder]");
+    }
+    if (args.size() == 2) {
+        std::string value(boost::to_lower_copy(std::string(*args[1])));
+        if (value != "behind" && value != "shoulder") {
+            throw std::runtime_error("Usage: jaview [behind|shoulder]");
+        }
+        saberControl().setShoulderView(value == "shoulder");
+    }
+    std::string line(saberControl().shoulderView() ? "jaview: over the right shoulder" : "jaview: behind, Jedi Academy's view");
+    if (auto *camera = saberControl().camera()) {
+        line += str(boost::format("; eyes %.2f m up, %.4f m per JA unit") % camera->eyeHeight() % camera->scale());
+    }
+    print(line);
+}
+
+void JaConsole::click(const ConsoleArgs &args) {
+    if (args.size() != 2) {
+        throw std::runtime_error("Usage: jaclick <tag>");
+    }
+    auto module = _game.module();
+    if (!module || !module->area()) {
+        throw std::runtime_error("Load a game first");
+    }
+    auto leader = _game.party().getLeader();
+    if (!leader) {
+        throw std::runtime_error("No party leader");
+    }
+    // Of the objects with the tag, the one nearest the leader.
+    std::string tag(*args[1]);
+    std::shared_ptr<Object> target;
+    float nearest = std::numeric_limits<float>::max();
+    for (auto &object : module->area()->objects()) {
+        if (!boost::iequals(object->tag(), tag)) {
+            continue;
+        }
+        float distance = glm::distance(object->position(), leader->position());
+        if (distance < nearest) {
+            nearest = distance;
+            target = object;
+        }
+    }
+    if (!target) {
+        throw std::runtime_error("No object tagged " + tag);
+    }
+    module->area()->selectObject(target, /*force=*/true);
+    module->onObjectClick(target);
+    print(str(boost::format("jaclick: %s, %.2f m from %s") % target->tag() % nearest % leader->tag()));
+}
+
+void JaConsole::globals(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jaglobals [name prefix]");
+    }
+    std::string prefix(args.size() == 2 ? std::string(*args[1]) : std::string());
+    auto matches = [&prefix](const std::string &name) {
+        return boost::istarts_with(name, prefix);
+    };
+    int count = 0;
+    for (auto &[name, value] : _game.globalNumbers()) {
+        if (matches(name)) {
+            print(str(boost::format("jaglobals: %s = %d") % name % value));
+            ++count;
+        }
+    }
+    for (auto &[name, value] : _game.globalBooleans()) {
+        if (matches(name)) {
+            print(str(boost::format("jaglobals: %s = %s") % name % (value ? "true" : "false")));
+            ++count;
+        }
+    }
+    for (auto &[name, value] : _game.globalStrings()) {
+        if (matches(name)) {
+            print(str(boost::format("jaglobals: %s = \"%s\"") % name % value));
+            ++count;
+        }
+    }
+    if (count == 0) {
+        print("jaglobals: none" + (prefix.empty() ? std::string() : " starting with " + prefix));
+    }
+}
+
 void registerJaConsoleCommands(Game &game, IConsole &console) {
     auto tool = std::make_shared<JaConsole>(game, console);
     // The console shows a failed command's message but does not log it; log
@@ -429,6 +529,14 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jaturn", &JaConsole::turn));
     console.registerCommand("jamouse", "show or set saber mode's mouse turn: jamouse [radians per unit]",
                             logged("jamouse", &JaConsole::mouse));
+    console.registerCommand("jalook", "tilt saber mode's camera down, as moving the mouse toward you does: jalook <degrees>",
+                            logged("jalook", &JaConsole::look));
+    console.registerCommand("jaview", "show or switch saber mode's camera, as V does: jaview [behind|shoulder]",
+                            logged("jaview", &JaConsole::view));
+    console.registerCommand("jaclick", "act on the object with a tag nearest the party leader, as a second left click does: jaclick <tag>",
+                            logged("jaclick", &JaConsole::click));
+    console.registerCommand("jaglobals", "log global variables: jaglobals [name prefix]",
+                            logged("jaglobals", &JaConsole::globals));
 }
 
 } // namespace game

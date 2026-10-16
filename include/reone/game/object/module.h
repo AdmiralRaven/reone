@@ -91,6 +91,9 @@ public:
     bool handle(const input::Event &event);
     void update(float dt);
 
+    /** Acts on an object as a second left click on it does: talks, attacks, opens, loots or uses it. */
+    void onObjectClick(const std::shared_ptr<Object> &object);
+
     std::vector<ContextAction> getContextActions(const std::shared_ptr<Object> &object) const;
 
     // Reputation is directed, so how the player may interact with a creature
@@ -160,7 +163,6 @@ private:
 
     void onCreatureClick(const std::shared_ptr<Creature> &creature);
     void onDoorClick(const std::shared_ptr<Door> &door);
-    void onObjectClick(const std::shared_ptr<Object> &object);
     void onPlaceableClick(const std::shared_ptr<Placeable> &placeable);
 
     void getEntryPoint(const std::string &waypoint, glm::vec3 &position, float &facing) const;

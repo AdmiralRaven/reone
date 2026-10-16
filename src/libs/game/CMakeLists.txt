@@ -194,6 +194,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/globalfade.h
     ${GAME_INCLUDE_DIR}/itemdescription.h
     ${GAME_INCLUDE_DIR}/jaanimator.h
+    ${GAME_INCLUDE_DIR}/jacamera.h
     ${GAME_INCLUDE_DIR}/jaconsole.h
     ${GAME_INCLUDE_DIR}/jaretarget.h
     ${GAME_INCLUDE_DIR}/jasaber.h
@@ -434,6 +435,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/globalfade.cpp
     ${GAME_SOURCE_DIR}/itemdescription.cpp
     ${GAME_SOURCE_DIR}/jaanimator.cpp
+    ${GAME_SOURCE_DIR}/jacamera.cpp
     ${GAME_SOURCE_DIR}/jaconsole.cpp
     ${GAME_SOURCE_DIR}/jaretarget.cpp
     ${GAME_SOURCE_DIR}/jasaber.cpp
