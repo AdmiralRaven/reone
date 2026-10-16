@@ -98,7 +98,10 @@ private:
  *   not done yet.
  * - X draws the saber into saber mode and puts it away again; KOTOR's own
  *   controls and cursor then come back. Saber mode also ends with a
- *   conversation, a menu screen, a new area or another party leader.
+ *   conversation, before its first line plays; with another camera; with a
+ *   screen other than the game, its in-game menu and the save/load screen,
+ *   which only pause it; and with a new area, another party leader or the
+ *   character's death.
  *
  * Jedi Academy's blades pass through everything here: hits, blocking and
  * damage are not part of saber mode yet.
@@ -125,8 +128,15 @@ public:
      */
     void enter();
 
-    /** Ends saber mode: puts the saber away and hands the character back to KOTOR's controls. */
-    void leave();
+    /**
+     * Ends saber mode: puts the saber away and hands the character back to
+     * KOTOR's controls and animations. The mouse is let go only while the
+     * game is still in third-person play; anything that took over, such as
+     * the first-person camera, keeps the mouse as it set it.
+     *
+     * \param reason why, printed first when given
+     */
+    void leave(const std::string &reason = std::string());
 
     /**
      * Takes the input saber mode uses, in the game with the third-person
@@ -144,8 +154,12 @@ public:
      */
     bool update(float dt);
 
-    /** Every frame: the mouse stays captured only while saber mode is on and the game is in play. */
-    void updateMouse();
+    /**
+     * Every frame, before the module updates, whatever the camera: ends saber
+     * mode when the game has left it, and otherwise keeps the mouse captured
+     * only while the game itself is on screen, not its menus.
+     */
+    void updateFrame();
 
     /**
      * Scripted input for unattended runs: what the player holds, in place of
@@ -195,7 +209,7 @@ private:
     JaSaberInput input() const;
     bool walking() const;
     bool handleKey(const input::KeyEvent &event);
-    /** Why saber mode cannot go on; empty when it can. */
+    /** Why saber mode must end; empty when it can go on, in play or paused by a menu. */
     std::string whyNotInPlay(const std::shared_ptr<Creature> &creature) const;
     void showPose();
     void print(const std::string &line);

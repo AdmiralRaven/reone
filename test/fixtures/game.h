@@ -251,6 +251,8 @@ public:
         float sight,
         float hearing);
     static void setOnNotice(Creature &creature, std::string script);
+    // Gives a creature a scene node without loading its appearance.
+    static void setSceneNode(Creature &creature, std::shared_ptr<scene::SceneNode> node);
     static void updatePerception(Area &area);
     static void publishPartyRuntimeState(
         Game &game,

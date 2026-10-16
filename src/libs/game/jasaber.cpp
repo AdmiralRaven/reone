@@ -209,9 +209,12 @@ void JaSaber::enter() {
               leader->tag() % model->model().name()));
 }
 
-void JaSaber::leave() {
+void JaSaber::leave(const std::string &reason) {
     if (!_active) {
         return;
+    }
+    if (!reason.empty()) {
+        print("jasaber: " + reason);
     }
     _active = false;
     if (auto creature = _creature.lock()) {
@@ -219,10 +222,11 @@ void JaSaber::leave() {
         // KOTOR's own animation blends in from the last pose shown.
         creature->holdAnimation(false);
     }
-    if (_capturedMouse) {
+    // A screen or camera that took over has set the mouse as it needs it.
+    if (_capturedMouse && _game.currentScreen() == Game::Screen::InGame && _game.cameraType() == CameraType::ThirdPerson) {
         _game.setRelativeMouseMode(false);
-        _capturedMouse = false;
     }
+    _capturedMouse = false;
     _driver.reset();
     _model = nullptr;
     _body = nullptr;
@@ -351,16 +355,24 @@ std::string JaSaber::whyNotInPlay(const std::shared_ptr<Creature> &creature) con
     if (creature->isDead()) {
         return "the character died";
     }
-    if (_game.currentScreen() != Game::Screen::InGame) {
-        return "the game left play";
-    }
-    if (_game.cameraType() != CameraType::ThirdPerson) {
-        return "the camera changed";
-    }
     if (creature->sceneNode().get() != _model) {
         return "the character's model changed";
     }
-    return "";
+    switch (_game.currentScreen()) {
+    case Game::Screen::InGame:
+        if (_game.cameraType() != CameraType::ThirdPerson) {
+            return "the camera changed";
+        }
+        return "";
+    case Game::Screen::InGameMenu:
+    case Game::Screen::SaveLoad:
+        // A menu over the game only pauses saber mode.
+        return "";
+    case Game::Screen::Conversation:
+        return "a conversation";
+    default:
+        return "the game left play";
+    }
 }
 
 bool JaSaber::update(float dt) {
@@ -370,8 +382,7 @@ bool JaSaber::update(float dt) {
     auto creature = _creature.lock();
     std::string reason(whyNotInPlay(creature));
     if (!reason.empty()) {
-        print("jasaber: " + reason);
-        leave();
+        leave(reason);
         return false;
     }
     _modeTime += dt;
@@ -410,11 +421,18 @@ void JaSaber::showPose() {
     }
 }
 
-void JaSaber::updateMouse() {
+void JaSaber::updateFrame() {
     if (!_active) {
         return;
     }
-    bool inPlay = _game.currentScreen() == Game::Screen::InGame && _game.cameraType() == CameraType::ThirdPerson;
+    // The module drives saber mode only with the third-person camera, so the
+    // ways out are checked here, every frame.
+    std::string reason(whyNotInPlay(_creature.lock()));
+    if (!reason.empty()) {
+        leave(reason);
+        return;
+    }
+    bool inPlay = _game.currentScreen() == Game::Screen::InGame;
     if (inPlay == _capturedMouse) {
         return;
     }

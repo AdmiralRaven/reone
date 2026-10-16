@@ -871,7 +871,7 @@ void Game::update(float frameTime) {
         }
     }
 
-    jaSaber().updateMouse();
+    jaSaber().updateFrame();
 
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
     if (updModule && !_paused) {
@@ -5476,6 +5476,11 @@ void Game::startDialog(const std::shared_ptr<Object> &owner, const std::string &
         return;
     }
 
+    // Saber mode holds the leader's animation; the conversation animates it
+    // from its first line.
+    if (_jaSaber) {
+        _jaSaber->leave("a conversation");
+    }
     stopMovement();
     setRelativeMouseMode(false);
     setCursorType(CursorType::Default);
