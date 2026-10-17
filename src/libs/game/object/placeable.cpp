@@ -52,16 +52,21 @@ void Placeable::loadFromBlueprint(const std::string &resRef) {
         return;
     }
     deserialize(*utp, SerializedIdentityContext::templateResource(resRef));
+    _blueprintResRef = boost::to_lower_copy(resRef);
 }
 
 void Placeable::deserialize(
     const resource::Gff &gff,
     const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (!identityContext.isSerializedState() &&
-        gff.readResRef(templateRes, "TemplateResRef")) {
-        if (auto utp = _services.resource.gffs.get(templateRes, ResType::Utp)) {
-            deserializeAll(*utp, SerializedIdentityContext::templateResource(templateRes));
+    if (gff.readResRef(templateRes, "TemplateResRef")) {
+        // A saved placeable's record starts from its template, which holds
+        // its appearance, scripts, conversation and name (#28).
+        _blueprintResRef = boost::to_lower_copy(templateRes);
+        if (!identityContext.isSerializedState()) {
+            if (auto utp = _services.resource.gffs.get(templateRes, ResType::Utp)) {
+                deserializeAll(*utp, SerializedIdentityContext::templateResource(templateRes));
+            }
         }
     }
     deserializeAll(gff, identityContext);

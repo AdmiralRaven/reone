@@ -53,10 +53,14 @@ void Door::deserialize(
     const resource::Gff &gff,
     const SerializedIdentityContext &identityContext) {
     std::string templateRes;
-    if (!identityContext.isSerializedState() &&
-        gff.readResRef(templateRes, "TemplateResRef")) {
-        if (auto utd = _services.resource.gffs.get(templateRes, ResType::Utd)) {
-            deserializeAll(*utd, SerializedIdentityContext::templateResource(templateRes));
+    if (gff.readResRef(templateRes, "TemplateResRef")) {
+        // A saved door's record starts from its template, which holds its
+        // scripts, conversation and name (#28).
+        _blueprintResRef = boost::to_lower_copy(templateRes);
+        if (!identityContext.isSerializedState()) {
+            if (auto utd = _services.resource.gffs.get(templateRes, ResType::Utd)) {
+                deserializeAll(*utd, SerializedIdentityContext::templateResource(templateRes));
+            }
         }
     }
     deserializeAll(gff, identityContext);

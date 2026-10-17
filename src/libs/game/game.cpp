@@ -46,6 +46,7 @@
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
 #include "reone/game/room.h"
+#include "reone/game/savedtemplates.h"
 #include "reone/game/savewidesnapshot.h"
 #include "reone/game/script/routines.h"
 #include "reone/game/surfaces.h"
@@ -1425,11 +1426,17 @@ bool Game::loadPreparedModule(
             auto stillCurrent = [&]() {
                 return destination == _module && arrival == _fadeArrival;
             };
+            // A save an earlier reone wrote may hold doors and placeables
+            // without their templates' fields (#28); the module's resources
+            // are committed now, so their templates can be read.
+            std::shared_ptr<Gff> git = restoringSavedWorld
+                                           ? withSavedTemplateFields(_services.resource.director, _services.resource.gffs, name, *ifo, prepared.git)
+                                           : prepared.git;
             destination->load(
                 name,
                 *ifo,
                 *prepared.are,
-                *prepared.git,
+                *git,
                 restoringSavedWorld);
             if (!stillCurrent()) {
                 return;
