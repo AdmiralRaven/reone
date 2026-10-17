@@ -36,10 +36,23 @@ JaCamera::Settings JaCamera::Settings::behind() {
 }
 
 JaCamera::Settings JaCamera::Settings::shoulder() {
+    // The user asked for "not sooo over the shoulder", 3/4 of the way there.
+    return behind().towards(overShoulder(), 0.75f);
+}
+
+JaCamera::Settings JaCamera::Settings::overShoulder() {
     Settings settings;
     settings.range = 56.0f;
     settings.vertOffset = 4.0f;
     settings.horzOffset = 16.0f;
+    return settings;
+}
+
+JaCamera::Settings JaCamera::Settings::towards(const Settings &other, float t) const {
+    Settings settings(*this);
+    settings.range = glm::mix(range, other.range, t);
+    settings.vertOffset = glm::mix(vertOffset, other.vertOffset, t);
+    settings.horzOffset = glm::mix(horzOffset, other.horzOffset, t);
     return settings;
 }
 

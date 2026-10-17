@@ -400,7 +400,7 @@ TEST_F(JaSaberMode, should_stand_as_far_back_as_kotor_camera_and_zoom_with_the_w
 
     // then: a tenth nearer
     EXPECT_NEAR(3.2f / 1.1f, distance(), 0.005f);
-    EXPECT_TRUE(printed("jasaber: camera range 2.91 m behind, 2.04 m over the shoulder"));
+    EXPECT_TRUE(printed("jasaber: camera range 2.91 m behind, 2.25 m over the shoulder"));
 
     // when: three notches toward the player, on a mouse whose wheel is flipped
     game.jaSaber().handle(wheel(-3.0f, input::MouseWheelDirection::Flipped));
@@ -413,7 +413,7 @@ TEST_F(JaSaberMode, should_stand_as_far_back_as_kotor_camera_and_zoom_with_the_w
     // the character as far to the side on the screen
     game.jaSaber().setShoulderView(true);
     play(2.0f);
-    float range = 3.2f / std::pow(1.1f, 4.0f) * 56.0f / 80.0f;
+    float range = 3.2f / std::pow(1.1f, 4.0f) * 62.0f / 80.0f;
     EXPECT_NEAR(range, distance(), 0.005f);
     const JaCamera &view = *game.jaSaber().camera();
     glm::vec3 target(view.idealTarget(leader->position(), thirdPersonCamera().facing(),

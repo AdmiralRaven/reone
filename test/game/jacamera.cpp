@@ -247,13 +247,13 @@ TEST(JaCamera, should_look_along_the_view_when_too_close_to_aim) {
 
 TEST(JaCamera, should_keep_a_view_proportions_at_another_range) {
     // when
-    auto shoulder = JaCamera::Settings::shoulder().atRange(112.0f);
+    auto shoulder = JaCamera::Settings::shoulder().atRange(124.0f);
     auto behind = JaCamera::Settings::behind().atRange(114.0f);
 
     // then: the sideways offset keeps its share of the range, the rest stays
-    EXPECT_FLOAT_EQ(112.0f, shoulder.range);
-    EXPECT_FLOAT_EQ(32.0f, shoulder.horzOffset);
-    EXPECT_FLOAT_EQ(4.0f, shoulder.vertOffset);
+    EXPECT_FLOAT_EQ(124.0f, shoulder.range);
+    EXPECT_FLOAT_EQ(24.0f, shoulder.horzOffset);
+    EXPECT_FLOAT_EQ(7.0f, shoulder.vertOffset);
     EXPECT_FLOAT_EQ(114.0f, behind.range);
     EXPECT_FLOAT_EQ(0.0f, behind.horzOffset);
     EXPECT_FLOAT_EQ(16.0f, behind.vertOffset);
@@ -269,9 +269,34 @@ TEST(JaCamera, should_move_aim_point_and_camera_to_the_right_over_the_shoulder) 
     // when
     camera.update(0.0f, kFeet, 0.0f, 0.0f, settings, clear());
 
-    // then: 16 units to the right, 4 above the eyes, the camera 56 behind,
+    // then: 12 units to the right, 7 above the eyes, the camera 62 behind,
     // looking the way the character does
-    glm::vec3 target(1.0f + 16.0f * kUnit, 2.0f, kEyes + 4.0f * kUnit);
+    glm::vec3 target(1.0f + 12.0f * kUnit, 2.0f, kEyes + 7.0f * kUnit);
     expectNear(target, camera.aim());
-    expectNear(target - glm::vec3(0.0f, 56.0f * kUnit, 0.0f), camera.eye());
+    expectNear(target - glm::vec3(0.0f, 62.0f * kUnit, 0.0f), camera.eye());
+}
+
+TEST(JaCamera, should_stand_three_quarters_of_the_way_from_behind_to_the_first_shoulder_view) {
+    // given
+    auto behind = JaCamera::Settings::behind();
+    auto over = JaCamera::Settings::overShoulder();
+
+    // when
+    auto shoulder = JaCamera::Settings::shoulder();
+
+    // then: 3/4 of the way from 80 to 56 behind, from 16 to 4 above the eyes
+    // and from 0 to 16 to the right, with JA's damping
+    EXPECT_FLOAT_EQ(62.0f, shoulder.range);
+    EXPECT_FLOAT_EQ(7.0f, shoulder.vertOffset);
+    EXPECT_FLOAT_EQ(12.0f, shoulder.horzOffset);
+    EXPECT_FLOAT_EQ(0.3f, shoulder.cameraDamp);
+    EXPECT_FLOAT_EQ(0.5f, shoulder.targetDamp);
+
+    // and the ends of the way are the two views
+    EXPECT_FLOAT_EQ(56.0f, over.range);
+    EXPECT_FLOAT_EQ(4.0f, over.vertOffset);
+    EXPECT_FLOAT_EQ(16.0f, over.horzOffset);
+    EXPECT_FLOAT_EQ(behind.range, behind.towards(over, 0.0f).range);
+    EXPECT_FLOAT_EQ(over.horzOffset, behind.towards(over, 1.0f).horzOffset);
+    EXPECT_FLOAT_EQ(over.vertOffset, behind.towards(over, 1.0f).vertOffset);
 }

@@ -53,12 +53,23 @@ public:
         static Settings behind();
 
         /**
-         * A view over the right shoulder, closer and lower: a proposal to try,
-         * not JA's. JA's own sideways cvar, cg_thirdPersonHorzOffset (0 by
-         * default), shifts the camera after aiming it and feeds the shift back
-         * into the damping; this shifts the aim point and the camera together.
+         * A view over the right shoulder, closer and lower: a proposal, not
+         * JA's. It stands 3/4 of the way from behind() to overShoulder(), the
+         * view the user first tried and found too far over the shoulder. JA's
+         * own sideways cvar, cg_thirdPersonHorzOffset (0 by default), shifts
+         * the camera after aiming it and feeds the shift back into the
+         * damping; this shifts the aim point and the camera together.
          */
         static Settings shoulder();
+
+        /** The first view over the shoulder: 16 units to the right, 4 above the eyes and 56 behind. */
+        static Settings overShoulder();
+
+        /**
+         * The view \p t of the way from this one to \p other, 0 being this
+         * one: the range and both offsets move, the damping stays this view's.
+         */
+        Settings towards(const Settings &other, float t) const;
 
         /**
          * The same view with the camera \p range units behind the aim point.
