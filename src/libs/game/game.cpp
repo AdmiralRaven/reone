@@ -947,7 +947,8 @@ bool Game::handleKeyDown(const input::KeyEvent &event) {
         break;
 
     case input::KeyCode::V:
-        if (_options.game.developer && _screen == Screen::InGame) {
+        // While saber mode is on, V is its view over the shoulder.
+        if (_options.game.developer && _screen == Screen::InGame && !(_jaSaber && _jaSaber->isActive())) {
             toggleInGameCameraType();
             return true;
         }

@@ -66,6 +66,24 @@ void expectNear(const glm::vec3 &expected, const glm::vec3 &actual, float tolera
     EXPECT_NEAR(expected.z, actual.z, tolerance);
 }
 
+// Turns reone's developer mode on or off for one test, and back after it.
+class DeveloperMode {
+public:
+    DeveloperMode(reone::game::OptionsView &options, bool on) :
+        _options(options),
+        _was(options.game.developer) {
+        _options.game.developer = on;
+    }
+
+    ~DeveloperMode() {
+        _options.game.developer = _was;
+    }
+
+private:
+    reone::game::OptionsView &_options;
+    bool _was;
+};
+
 // A conversation that animates the party leader as it starts, as a
 // conversation's first line does, and notes whether that worked.
 class AnimatingDialogGUI : public DialogGUI {
@@ -351,6 +369,37 @@ TEST_F(JaSaberMode, should_switch_between_the_view_behind_and_over_the_shoulder_
     game.jaSaber().handle(keyDown(input::KeyCode::V));
     EXPECT_FALSE(game.jaSaber().shoulderView());
     EXPECT_TRUE(printed("jasaber: camera behind"));
+}
+
+TEST_F(JaSaberMode, should_take_v_through_the_game_with_developer_mode_on_or_off) {
+    for (bool on : {false, true}) {
+        // given: developer mode, whose own V switches to the free camera
+        DeveloperMode developer(engine.options(), on);
+        bool shoulder = game.jaSaber().shoulderView();
+
+        // when: V reaches the game, as a key press in its window does
+        EXPECT_TRUE(game.handle(keyDown(input::KeyCode::V))) << "developer mode " << on;
+        play(0.1f);
+
+        // then: saber mode took it, and is still on in the third-person camera
+        EXPECT_NE(shoulder, game.jaSaber().shoulderView()) << "developer mode " << on;
+        EXPECT_TRUE(game.jaSaber().isActive()) << "developer mode " << on;
+        EXPECT_EQ(reone::game::CameraType::ThirdPerson, game.cameraType()) << "developer mode " << on;
+    }
+}
+
+TEST_F(JaSaberMode, should_leave_v_to_the_developer_camera_once_saber_mode_is_off) {
+    // given
+    DeveloperMode developer(engine.options(), true);
+    game.jaSaber().leave();
+
+    // when
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::V)));
+
+    // then: developer mode's free camera, and the saber's view as it was
+    EXPECT_EQ(reone::game::CameraType::FirstPerson, game.cameraType());
+    EXPECT_FALSE(game.jaSaber().shoulderView());
+    EXPECT_FALSE(printed("jasaber: camera over the right shoulder"));
 }
 
 TEST_F(JaSaberMode, should_tilt_and_switch_the_camera_from_the_console) {
