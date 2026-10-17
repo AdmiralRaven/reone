@@ -95,8 +95,9 @@ void JaBodyAnimator::play(Layer &layer, const std::string &clip, float rate, flo
     }
     const GhoulAnimationClip &info = _sequencer.clip(name);
     JaRetargeter::Pose from(layerPose(layer));
+    const Layer &other = &layer == &_legs ? _torsoLayer : _legs;
+    layer.time = !restart && other.clip == name ? other.time : 0.0f;
     layer.clip = name;
-    layer.time = 0.0f;
     layer.rate = rate;
     float ownRate = info.fps != 0.0f ? std::abs(info.fps) : 20.0f;
     layer.period = info.loopFrames >= 0 && info.numFrames > 1 ? static_cast<float>(info.numFrames) / ownRate : 0.0f;
@@ -252,31 +253,53 @@ void JaSaberDriver::start(const JaRetargeter::Pose &pose) {
 JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, bool walk, float speed) {
     Step result;
     _animator.advance(dt);
+    _legsHold = std::max(0.0f, _legsHold - std::max(0.0f, dt));
     result.started = _machine.tick(dt, input);
     const auto &moves = _machine.moves();
+    result.moving = input.forward != 0 || input.right != 0;
     for (int id : result.started) {
         const auto &timing = _machine.timing(id);
-        _animator.play(JaBodyAnimator::kBody, moves.move(id).clip, timing.rate, timing.blendMs / 1000.0f);
+        if (!result.moving) {
+            _animator.play(JaBodyAnimator::kBody, moves.move(id).clip, timing.rate, timing.blendMs / 1000.0f);
+            _legsHold = timing.holdMs / 1000.0f;
+        } else if (id != moves.ready()) {
+            // The legs go on walking or running; the ready stance takes up
+            // their clip on the torso, below.
+            _animator.play(JaBodyAnimator::kTorso, moves.move(id).clip, timing.rate, timing.blendMs / 1000.0f);
+        }
     }
 
     bool ready = _machine.move() == moves.ready();
-    result.moving = ready && (input.forward != 0 || input.right != 0);
+    if (result.moving && input.forward < 0 && moves.move(_machine.move()).kind == JaMoveKind::Attack) {
+        result.speedScale = kBackwardsAttackSpeed;
+    }
     const auto &locomotion = locomotionClips();
-    if (result.moving) {
+    bool legsFree = _legsHold <= 0.0f;
+    if (result.moving && legsFree) {
         std::string clip(jaLocomotionClip(input.forward, walk));
-        float rate = jaFootSlideRate(_sequencer.clip(clip), walk, speed / _retargeter.scale());
+        float rate = jaFootSlideRate(_sequencer.clip(clip), walk, speed * result.speedScale / _retargeter.scale());
+        bool torsoJoins = ready && _animator.clip(JaBodyAnimator::kTorso) != clip;
         if (_animator.clip(JaBodyAnimator::kLegs) != clip) {
             _animator.play(JaBodyAnimator::kLegs, clip, rate, kLegsBlend);
-            _animator.play(JaBodyAnimator::kTorso, clip, rate, walk ? kReadyBlend : kLegsBlend);
         } else {
-            _animator.play(JaBodyAnimator::kBody, clip, rate, 0.0f, false);
+            _animator.play(JaBodyAnimator::kLegs, clip, rate, 0.0f, false);
         }
-    } else if (ready && std::find(locomotion.begin(), locomotion.end(), _animator.clip(JaBodyAnimator::kLegs)) != locomotion.end()) {
-        // Stopping: back into the ready stance.
+        if (torsoJoins) {
+            // In step with the legs, as g_synchSplitAnims plays it.
+            _animator.play(JaBodyAnimator::kTorso, clip, rate, walk ? kReadyBlend : kLegsBlend, false);
+        } else if (ready) {
+            _animator.play(JaBodyAnimator::kTorso, clip, rate, 0.0f, false);
+        }
+    } else if (!result.moving && legsFree &&
+               std::find(locomotion.begin(), locomotion.end(), _animator.clip(JaBodyAnimator::kLegs)) != locomotion.end()) {
+        // Stopping: the legs back into the ready stance, and the torso too
+        // unless a move plays on it.
         const auto &stance = moves.move(moves.ready());
         const auto &timing = _machine.timing(stance.id);
         _animator.play(JaBodyAnimator::kLegs, stance.clip, timing.rate, kLegsBlend);
-        _animator.play(JaBodyAnimator::kTorso, stance.clip, timing.rate, timing.blendMs / 1000.0f);
+        if (ready) {
+            _animator.play(JaBodyAnimator::kTorso, stance.clip, timing.rate, timing.blendMs / 1000.0f);
+        }
     }
 
     float target = result.moving ? glm::radians(jaLegsYawTarget(input.forward, input.right)) : 0.0f;

@@ -65,7 +65,9 @@ public:
      * Plays \p clip on \p parts from its first frame, at \p rate times its
      * own speed, each part blending from what it shows now over
      * \p blendSeconds. A part already playing the clip goes on, at the new
-     * rate, unless \p restart.
+     * rate, unless \p restart. Unless \p restart, one part taking up the
+     * clip the other plays joins it where it is, as g_synchSplitAnims has
+     * Jedi Academy do (bg_panimate.cpp:4874-4883).
      */
     void play(int parts, const std::string &clip, float rate, float blendSeconds, bool restart = true);
 
@@ -144,21 +146,30 @@ private:
 /**
  * Saber mode's body, apart from the game around it. Each tick:
  *
- * - the saber moves JaSaberStateMachine starts play on the whole body, as
- *   Jedi Academy plays them on a player standing still, with their blends;
- * - in the ready stance, moving plays Jedi Academy's saber-out walk or run at
- *   the speed g_noFootSlide gives it; the legs turn toward the movement and
- *   the torso back toward the view; standing again blends back into the
- *   stance;
- * - while any other move plays, the character stands: attacking on the move
- *   is not done yet.
+ * - each saber move JaSaberStateMachine starts plays with its blend on the
+ *   whole body if the player stands, and on the torso alone if he moves, as
+ *   PM_SetSaberMove has it (bg_pmove.cpp:9174, 9491-9505);
+ * - a move on the whole body holds the legs until its hold runs out
+ *   (bg_panimate.cpp:4849-4850), even if the player moves meanwhile;
+ * - otherwise moving plays Jedi Academy's saber-out walk or run on the legs,
+ *   at the speed g_noFootSlide gives it, and on the torso too in the ready
+ *   stance (bg_pmove.cpp:9419-9448); the legs turn toward the movement and
+ *   the torso back toward the view; standing again blends the legs back into
+ *   the stance, and the torso in the ready stance;
+ * - the fast style moves at full speed while attacking, but at 3/4 of it
+ *   backwards during an attack (ClientThink_real, g_active.cpp:4562-4567;
+ *   4595-4613 slows only the other styles).
  */
 class JaSaberDriver : boost::noncopyable {
 public:
     struct Step {
         std::vector<int> started; /**< the saber moves that started, in order */
         bool moving {false};      /**< whether the character moves this tick */
+        float speedScale {1.0f};  /**< the share of its walking or running speed it moves at */
     };
+
+    /** How fast the fast style moves backwards during an attack (g_active.cpp:4562-4567). */
+    static constexpr float kBackwardsAttackSpeed = 0.75f;
 
     /** The saber-out walks and runs (PM_Footsteps, bg_pmove.cpp:8417-8595). */
     static const std::vector<std::string> &locomotionClips();
@@ -193,6 +204,7 @@ private:
     JaSaberStateMachine _machine;
     JaBodyAnimator _animator;
     float _legsYaw {0.0f};
+    float _legsHold {0.0f}; /**< how much longer a move on the whole body holds the legs, in seconds */
 };
 
 } // namespace game

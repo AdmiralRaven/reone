@@ -356,6 +356,14 @@ bool JaSaber::handleKey(const input::KeyEvent &event) {
             setShoulderView(!_shoulder);
         }
         return true;
+    case input::KeyCode::Space:
+        // Jedi Academy's jump, not yet in. KOTOR's pause on Space showed no
+        // sign of itself and looked like the game freezing, so saber mode
+        // keeps the key.
+        if (down && !event.repeat) {
+            print("jasaber: Space would jump, which saber mode doesn't do yet");
+        }
+        return true;
     default:
         return false;
     }
@@ -511,7 +519,8 @@ bool JaSaber::update(float dt) {
     _modeTime += dt;
     JaSaberInput in(input());
     bool walk = walking();
-    auto step = _driver->step(dt, in, walk, walk ? creature->walkSpeed() : creature->runSpeed());
+    float speed = walk ? creature->walkSpeed() : creature->runSpeed();
+    auto step = _driver->step(dt, in, walk, speed);
     const auto &moves = _driver->machine().moves();
     for (int id : step.started) {
         info(str(boost::format("jasaber: %s (%s) at %.3f s") % moves.move(id).name % moves.move(id).clip % _modeTime));
@@ -527,7 +536,8 @@ bool JaSaber::update(float dt) {
         glm::vec2 direction(glm::normalize(static_cast<float>(in.forward) * forward + static_cast<float>(in.right) * right));
         creature->clearAllActions();
         creature->clearPath();
-        area->moveCreature(creature, direction, !walk, dt, FLT_MAX);
+        // Slower backwards in an attack: the step's share of the speed.
+        area->moveCreature(creature, direction, !walk, dt, speed * step.speedScale * dt);
     }
     creature->setFacing(view + _driver->legsYaw());
     showPose();

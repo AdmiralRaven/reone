@@ -486,6 +486,24 @@ TEST_F(JaSaberMode, should_leave_v_to_the_developer_camera_once_saber_mode_is_of
     EXPECT_FALSE(printed("jasaber: camera over the right shoulder"));
 }
 
+TEST_F(JaSaberMode, should_keep_space_from_pausing_the_game) {
+    // when: Space reaches the game, as a key press in its window does
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Space)));
+    play(0.1f);
+
+    // then: saber mode took it, and the game runs on
+    EXPECT_FALSE(game.isPaused());
+    EXPECT_TRUE(game.jaSaber().isActive());
+    EXPECT_TRUE(printed("jasaber: Space would jump, which saber mode doesn't do yet"));
+
+    // and with the saber away, Space is KOTOR's pause again
+    game.jaSaber().leave();
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Space)));
+    EXPECT_TRUE(game.isPaused());
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Space)));
+    EXPECT_FALSE(game.isPaused());
+}
+
 TEST_F(JaSaberMode, should_tilt_and_switch_the_camera_from_the_console) {
     // given
     TestGameModule::initConsole(game);
