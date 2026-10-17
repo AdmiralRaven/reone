@@ -163,7 +163,9 @@ std::shared_ptr<Gff> findTemplate(const std::string &resRef, ResType type) {
         return sharedTagDoorTemplate(resRef, "k_first");
     }
     if (resRef == "end_door013" && type == ResType::Utd) {
-        return sharedTagDoorTemplate(resRef, "k_second");
+        // A template need not name itself: this one still names the one it
+        // could have been copied from.
+        return sharedTagDoorTemplate("end_door011", "k_second");
     }
     if (resRef == "invisible002" && type == ResType::Utp) {
         return sceneObjectTemplate();
@@ -243,7 +245,7 @@ TEST(SavedTemplates, should_take_the_object_with_that_tag_at_that_place) {
     // when
     auto repair = repairSavedTemplateFields(*git({savedDoor("end_door10", 49.43f), savedDoor("end_door10", 47.42f)}, {}, 0), *authored, templates());
 
-    // then: each the one at its place
+    // then: each the one at its place, named as the installed GIT names it
     ASSERT_TRUE(repair.git);
     auto doors = repair.git->getList("Door List");
     EXPECT_EQ("end_door013", doors.at(0)->getString("TemplateResRef"));
