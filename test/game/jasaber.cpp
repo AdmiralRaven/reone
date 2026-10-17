@@ -50,6 +50,10 @@ void reone::game::TestGameModule::setSceneNode(Creature &creature, std::shared_p
     creature._sceneNode = std::move(node);
 }
 
+void reone::game::TestGameModule::setCameraStyle(Area &area, CameraStyle style) {
+    area._camStyleDefault = std::move(style);
+}
+
 namespace {
 
 input::Event mouseMotion(float xrel, float yrel) {
@@ -58,6 +62,10 @@ input::Event mouseMotion(float xrel, float yrel) {
 
 input::Event keyDown(input::KeyCode code) {
     return input::Event::newKeyDown(input::KeyEvent(true, code, 0, false));
+}
+
+input::Event wheel(float notches, input::MouseWheelDirection direction = input::MouseWheelDirection::Normal) {
+    return input::Event::newMouseWheel(input::MouseWheelEvent(0.0f, notches, direction));
 }
 
 void expectNear(const glm::vec3 &expected, const glm::vec3 &actual, float tolerance) {
@@ -369,6 +377,82 @@ TEST_F(JaSaberMode, should_switch_between_the_view_behind_and_over_the_shoulder_
     game.jaSaber().handle(keyDown(input::KeyCode::V));
     EXPECT_FALSE(game.jaSaber().shoulderView());
     EXPECT_TRUE(printed("jasaber: camera behind"));
+}
+
+TEST_F(JaSaberMode, should_stand_as_far_back_as_kotor_camera_and_zoom_with_the_wheel) {
+    // given: the area's camera style, KOTOR's default on the Endar Spire, 3.2 m back
+    TestGameModule::setCameraStyle(*game.module()->area(), CameraStyle {"", 3.2f, 83.0f, 0.45f, 55.0f});
+    auto distance = [this]() {
+        const JaCamera &view = *game.jaSaber().camera();
+        return glm::distance(view.eye(), view.aim());
+    };
+
+    // when
+    play(2.0f);
+
+    // then: JA's camera stands as far behind its aim point as KOTOR's
+    EXPECT_NEAR(3.2f, game.jaSaber().cameraRange(), 1e-5f);
+    EXPECT_NEAR(3.2f, distance(), 0.005f);
+
+    // when: the wheel turns one notch away
+    EXPECT_TRUE(game.jaSaber().handle(wheel(1.0f)));
+    play(2.0f);
+
+    // then: a tenth nearer
+    EXPECT_NEAR(3.2f / 1.1f, distance(), 0.005f);
+    EXPECT_TRUE(printed("jasaber: camera range 2.91 m behind, 2.04 m over the shoulder"));
+
+    // when: three notches toward the player, on a mouse whose wheel is flipped
+    game.jaSaber().handle(wheel(-3.0f, input::MouseWheelDirection::Flipped));
+    play(2.0f);
+
+    // then: three notches nearer still
+    EXPECT_NEAR(3.2f / std::pow(1.1f, 4.0f), distance(), 0.005f);
+
+    // and over the shoulder, the camera keeps JA's share of the range, with
+    // the character as far to the side on the screen
+    game.jaSaber().setShoulderView(true);
+    play(2.0f);
+    float range = 3.2f / std::pow(1.1f, 4.0f) * 56.0f / 80.0f;
+    EXPECT_NEAR(range, distance(), 0.005f);
+    const JaCamera &view = *game.jaSaber().camera();
+    glm::vec3 target(view.idealTarget(leader->position(), thirdPersonCamera().facing(),
+                                      JaCamera::Settings::shoulder().atRange(range / view.scale())));
+    expectNear(target, view.aim(), 1e-3f);
+
+    // and the zoom stops at half and twice KOTOR's distance, and lasts into
+    // the next saber mode
+    for (int i = 0; i < 50; ++i) {
+        game.jaSaber().handle(wheel(-1.0f));
+    }
+    game.jaSaber().leave();
+    game.jaSaber().enter();
+    EXPECT_NEAR(6.4f, game.jaSaber().cameraRange(), 1e-4f);
+    for (int i = 0; i < 50; ++i) {
+        game.jaSaber().handle(wheel(1.0f));
+    }
+    EXPECT_NEAR(1.6f, game.jaSaber().cameraRange(), 1e-4f);
+}
+
+TEST_F(JaSaberMode, should_set_the_camera_range_from_the_console) {
+    // given
+    TestGameModule::initConsole(game);
+    TestGameModule::setCameraStyle(*game.module()->area(), CameraStyle {"", 3.2f, 83.0f, 0.45f, 55.0f});
+
+    // when
+    console.execute("jarange", {"4"});
+
+    // then
+    EXPECT_NEAR(4.0f, game.jaSaber().cameraRange(), 1e-5f);
+    EXPECT_TRUE(printed("jarange: 4.00 m behind the aim point; KOTOR's camera stands 3.20 m back"));
+
+    // and back to KOTOR's
+    console.execute("jarange", {"kotor"});
+    EXPECT_NEAR(3.2f, game.jaSaber().cameraRange(), 1e-5f);
+
+    // and only in saber mode
+    game.jaSaber().leave();
+    EXPECT_THROW(console.execute("jarange", {"4"}), std::runtime_error);
 }
 
 TEST_F(JaSaberMode, should_take_v_through_the_game_with_developer_mode_on_or_off) {
