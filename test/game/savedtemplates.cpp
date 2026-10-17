@@ -20,6 +20,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <map>
 
 #include "../fixtures/engine.h"
 #include "../fixtures/game.h"
@@ -36,8 +37,12 @@
 #include "reone/resource/2da.h"
 #include "reone/resource/container/erf.h"
 #include "reone/resource/container/rim.h"
+#include "reone/resource/format/bifreader.h"
 #include "reone/resource/format/gffreader.h"
+#include "reone/resource/format/keyreader.h"
 #include "reone/resource/gff.h"
+#include "reone/system/fileutil.h"
+#include "reone/system/stream/fileinput.h"
 #include "reone/system/stream/memoryinput.h"
 
 using namespace reone;
@@ -454,11 +459,54 @@ std::shared_ptr<Gff> recordByTag(const Gff &git, const std::string &list, const 
     return nullptr;
 }
 
+// The game's own templates: what chitin.key puts in data/templates.bif, where
+// the game looks after the module. Read here without the other BIFs, which
+// the KEY container would open too.
+std::map<ResourceId, ByteBuffer> gameTemplates(const std::filesystem::path &gameDir) {
+    std::map<ResourceId, ByteBuffer> templates;
+    auto keyPath = findFileIgnoreCase(gameDir, "chitin.key");
+    if (!keyPath) {
+        return templates;
+    }
+    FileInputStream key(*keyPath);
+    KeyReader keyReader(key);
+    keyReader.load();
+    const auto &files = keyReader.files();
+    for (int i = 0; i < static_cast<int>(files.size()); ++i) {
+        if (!boost::iequals(std::filesystem::path(files[i].filename).filename().string(), "templates.bif")) {
+            continue;
+        }
+        auto bifPath = findFileIgnoreCase(gameDir, files[i].filename);
+        if (!bifPath) {
+            continue;
+        }
+        FileInputStream bif(*bifPath);
+        BifReader bifReader(bif);
+        bifReader.load();
+        const auto &resources = bifReader.resources();
+        for (const auto &entry : keyReader.keys()) {
+            if (entry.bifIdx != i || entry.resIdx < 0 || entry.resIdx >= static_cast<int>(resources.size())) {
+                continue;
+            }
+            const auto &resource = resources[entry.resIdx];
+            ByteBuffer data(resource.fileSize);
+            if (!data.empty()) {
+                bif.seek(resource.offset, SeekOrigin::Begin);
+                bif.read(&data[0], static_cast<int>(data.size()));
+            }
+            templates.emplace(entry.resId, std::move(data));
+        }
+    }
+    return templates;
+}
+
 } // namespace
 
 // Runs only with the player's own files (#28):
 //   REONE_TEST_KOTOR_DIR: KOTOR's folder, with modules/end_m01aa.rim and end_m01aa_s.rim
 //   REONE_TEST_KOTOR_SAVE: a save folder with SAVEGAME.sav, holding end_m01aa
+// With chitin.key and data/templates.bif in KOTOR's folder too, it checks
+// every placeable as well.
 TEST(SavedTemplatesOnGameFiles, should_restore_the_endar_spire_door_and_scene_object) {
     const char *gameDir = std::getenv("REONE_TEST_KOTOR_DIR");
     const char *saveDir = std::getenv("REONE_TEST_KOTOR_SAVE");
@@ -484,9 +532,15 @@ TEST(SavedTemplatesOnGameFiles, should_restore_the_endar_spire_door_and_scene_ob
         GTEST_SKIP() << "This save's doors and placeables have their templates' fields";
     }
 
-    // when
+    // when: templates are looked up in the module, then in the game's own
+    // templates.bif when the folder has it
+    auto game = gameTemplates(gameDir);
     auto repair = repairSavedTemplateFields(*savedGit, *authoredGit, [&](const std::string &resRef, ResType type) {
-        return readGff(blueprints.findResourceData(ResourceId(resRef, type)));
+        if (auto blueprint = readGff(blueprints.findResourceData(ResourceId(resRef, type)))) {
+            return blueprint;
+        }
+        auto found = game.find(ResourceId(resRef, type));
+        return found != game.end() ? readGff(found->second) : nullptr;
     });
 
     // then: the locked door and the scene object behind it
@@ -502,14 +556,22 @@ TEST(SavedTemplatesOnGameFiles, should_restore_the_endar_spire_door_and_scene_ob
     EXPECT_EQ("k_pend_resume", sceneObject->getString("OnUserDefined"));
     EXPECT_EQ(54u, sceneObject->getUint("Appearance"));
 
-    // and the records the module's own templates cover: every door, and the
-    // placeables whose templates the module holds
-    int doors = 0;
-    for (const auto &record : repair.git->getList("Door List")) {
-        doors += record->has("OnOpen") ? 1 : 0;
+    // and every door, whose templates the module holds; with the game's
+    // templates too, every placeable as well
+    auto doors = repair.git->getList("Door List");
+    auto placeables = repair.git->getList("Placeable List");
+    for (const auto &record : doors) {
+        EXPECT_TRUE(record->has("OnOpen")) << record->getString("Tag");
     }
-    EXPECT_EQ(static_cast<int>(repair.git->getList("Door List").size()), doors);
-    std::cout << "Restored " << repair.repaired << " records; unmatched:";
+    if (!game.empty()) {
+        for (const auto &record : placeables) {
+            EXPECT_TRUE(record->has("Appearance")) << record->getString("Tag");
+        }
+        EXPECT_THAT(repair.unmatched, IsEmpty());
+    }
+    std::cout << "Game templates read: " << game.size() << ". Restored " << repair.repaired << " of "
+              << doors.size() + placeables.size() << " records (" << doors.size() << " doors, "
+              << placeables.size() << " placeables); unmatched:";
     for (const auto &record : repair.unmatched) {
         std::cout << " " << record;
     }
