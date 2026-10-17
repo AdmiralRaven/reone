@@ -69,6 +69,7 @@ public:
     void mouse(const ConsoleArgs &args);
     void look(const ConsoleArgs &args);
     void view(const ConsoleArgs &args);
+    void range(const ConsoleArgs &args);
     void click(const ConsoleArgs &args);
     void globals(const ConsoleArgs &args);
 
@@ -424,9 +425,33 @@ void JaConsole::view(const ConsoleArgs &args) {
     }
     std::string line(saberControl().shoulderView() ? "jaview: over the right shoulder" : "jaview: behind, Jedi Academy's view");
     if (auto *camera = saberControl().camera()) {
-        line += str(boost::format("; eyes %.2f m up, %.4f m per JA unit") % camera->eyeHeight() % camera->scale());
+        line += str(boost::format("; eyes %.2f m up, %.4f m per JA unit; range %.2f m") %
+                    camera->eyeHeight() % camera->scale() % saberControl().cameraRange());
     }
     print(line);
+}
+
+void JaConsole::range(const ConsoleArgs &args) {
+    if (args.size() > 2) {
+        throw std::runtime_error("Usage: jarange [metres behind the aim point|kotor]");
+    }
+    if (!saberControl().isActive()) {
+        throw std::runtime_error("Saber mode is off; jarange sets its camera's range");
+    }
+    float kotor = saberControl().kotorCameraDistance();
+    if (args.size() == 2) {
+        if (boost::to_lower_copy(std::string(*args[1])) == "kotor") {
+            saberControl().setZoom(1.0f);
+        } else {
+            auto metres = args.get<float>(1);
+            if (!metres || !std::isfinite(*metres) || *metres <= 0.0f) {
+                throw std::runtime_error("The range must be a positive number of metres, or kotor");
+            }
+            saberControl().setZoom(*metres / kotor);
+        }
+    }
+    print(str(boost::format("jarange: %.2f m behind the aim point; KOTOR's camera stands %.2f m back") %
+              saberControl().cameraRange() % kotor));
 }
 
 void JaConsole::click(const ConsoleArgs &args) {
@@ -533,6 +558,8 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jalook", &JaConsole::look));
     console.registerCommand("jaview", "show or switch saber mode's camera, as V does: jaview [behind|shoulder]",
                             logged("jaview", &JaConsole::view));
+    console.registerCommand("jarange", "show or set how far saber mode's camera stands behind, as the mouse wheel does: jarange [metres|kotor]",
+                            logged("jarange", &JaConsole::range));
     console.registerCommand("jaclick", "act on the object with a tag nearest the party leader, as a second left click does: jaclick <tag>",
                             logged("jaclick", &JaConsole::click));
     console.registerCommand("jaglobals", "log global variables: jaglobals [name prefix]",

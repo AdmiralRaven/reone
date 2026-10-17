@@ -92,7 +92,9 @@ private:
  *   looks. Moving the mouse sideways turns the view; moving it forward and
  *   back tilts it, as far as JA lets its player look, 75 degrees up or down.
  * - The camera is Jedi Academy's third-person camera (JaCamera), scaled to
- *   the character. V switches it to a view over the right shoulder, and back.
+ *   the character, as far behind as KOTOR's own camera stands in the area.
+ *   V switches it to a view over the right shoulder, and back; the mouse
+ *   wheel brings both nearer or farther.
  * - W, S, A and D (or Z and C) move it forward, back and sideways, and B or
  *   Shift walks, with Jedi Academy's saber-out walks and runs. Moving
  *   sideways, the legs turn toward the movement while the torso keeps
@@ -119,6 +121,13 @@ public:
      * reone's own mouse look turns 0.001.
      */
     static constexpr float kDefaultMouseTurn = 0.0019f;
+
+    /** How much nearer or farther one notch of the mouse wheel brings the camera. */
+    static constexpr float kWheelZoom = 1.1f;
+
+    /** The camera's range as a share of KOTOR's camera distance, at most and at least. */
+    static constexpr float kMinZoom = 0.5f;
+    static constexpr float kMaxZoom = 2.0f;
 
     JaSaber(Game &game, IConsole &console) :
         _game(game),
@@ -194,6 +203,23 @@ public:
     /** Saber mode's camera; none while saber mode is off. */
     const JaCamera *camera() const { return _view ? &*_view : nullptr; }
 
+    /**
+     * How far the camera stands behind its aim point in the view behind, in
+     * metres: KOTOR's own camera distance in the area, times the zoom. The
+     * view over the shoulder stands at JA's share of it, 56 to 80. 0 while
+     * saber mode is off.
+     */
+    float cameraRange() const;
+
+    /** KOTOR's own camera distance in the area, in metres; JA's range for the character without one. */
+    float kotorCameraDistance() const;
+
+    /** The camera's range as a share of KOTOR's camera distance; kept for the next time saber mode starts. */
+    float zoom() const { return _zoom; }
+
+    /** Sets the zoom, within kMinZoom and kMaxZoom, and prints the range it gives. */
+    void setZoom(float zoom);
+
     float mouseTurn() const { return _mouseTurn; }
     void setMouseTurn(float radiansPerUnit) { _mouseTurn = radiansPerUnit; }
 
@@ -231,6 +257,7 @@ private:
     float _modeTime {0.0f};
     float _pitch {0.0f};
     bool _shoulder {false};
+    float _zoom {1.0f};
     std::optional<JaCamera> _view;
 
     JaSaberInput input() const;
@@ -243,6 +270,7 @@ private:
     void updateCamera(float dt);
     /** The third-person camera of the area saber mode started in. */
     ThirdPersonCamera *thirdPersonCamera() const;
+
     void print(const std::string &line);
 };
 

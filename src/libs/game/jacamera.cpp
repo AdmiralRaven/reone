@@ -43,6 +43,15 @@ JaCamera::Settings JaCamera::Settings::shoulder() {
     return settings;
 }
 
+JaCamera::Settings JaCamera::Settings::atRange(float newRange) const {
+    Settings settings(*this);
+    if (range > 0.0f) {
+        settings.horzOffset = horzOffset * newRange / range;
+    }
+    settings.range = newRange;
+    return settings;
+}
+
 JaCamera::JaCamera(float eyeHeight) :
     _eyeHeight(eyeHeight),
     _scale(eyeHeight / kJaEyeHeight) {

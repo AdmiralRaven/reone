@@ -298,6 +298,14 @@ bool JaSaber::handle(const input::Event &event) {
         turn(-_mouseTurn * event.motion.xrel);
         look(_mouseTurn * event.motion.yrel);
         return true;
+    case input::EventType::MouseWheel: {
+        // Rolling the wheel away brings the camera nearer, as in most games.
+        float notches = event.wheel.direction == input::MouseWheelDirection::Flipped ? -event.wheel.y : event.wheel.y;
+        if (notches != 0.0f) {
+            setZoom(_zoom * std::pow(kWheelZoom, -notches));
+        }
+        return true;
+    }
     case input::EventType::MouseButtonDown:
     case input::EventType::MouseButtonUp:
         if (event.button.button == input::MouseButton::Left) {
@@ -383,6 +391,33 @@ void JaSaber::setShoulderView(bool shoulder) {
     print(shoulder ? "jasaber: camera over the right shoulder" : "jasaber: camera behind");
 }
 
+float JaSaber::kotorCameraDistance() const {
+    auto module = _module.lock();
+    if (module && module->area() && module->area()->camStyleDefault().distance > 0.0f) {
+        return module->area()->camStyleDefault().distance;
+    }
+    return _view ? JaCamera::Settings::behind().range * _view->scale() : 0.0f;
+}
+
+float JaSaber::cameraRange() const {
+    if (!_active || !_view) {
+        return 0.0f;
+    }
+    return _zoom * kotorCameraDistance();
+}
+
+void JaSaber::setZoom(float zoom) {
+    if (!std::isfinite(zoom)) {
+        return;
+    }
+    _zoom = glm::clamp(zoom, kMinZoom, kMaxZoom);
+    if (_active && _view) {
+        float range = cameraRange();
+        float shoulder = range * JaCamera::Settings::shoulder().range / JaCamera::Settings::behind().range;
+        print(str(boost::format("jasaber: camera range %.2f m behind, %.2f m over the shoulder") % range % shoulder));
+    }
+}
+
 ThirdPersonCamera *JaSaber::thirdPersonCamera() const {
     auto module = _module.lock();
     if (!module || !module->area()) {
@@ -397,8 +432,14 @@ void JaSaber::updateCamera(float dt) {
     if (!camera || !creature || !_view) {
         return;
     }
-    // Damping carries the camera from one view to the other when V switches them.
-    const JaCamera::Settings settings(_shoulder ? JaCamera::Settings::shoulder() : JaCamera::Settings::behind());
+    // Damping carries the camera from one view to the other when V switches
+    // them, and to a new range when the wheel turns. Both views keep JA's
+    // proportions at the range KOTOR's camera stands at, times the zoom.
+    float range = cameraRange() / _view->scale();
+    const JaCamera::Settings behind(JaCamera::Settings::behind());
+    const JaCamera::Settings settings(_shoulder
+                                          ? JaCamera::Settings::shoulder().atRange(range * JaCamera::Settings::shoulder().range / behind.range)
+                                          : behind.atRange(range));
     _view->update(dt, creature->position(), camera->facing(), _pitch, settings,
                   [camera](const glm::vec3 &from, const glm::vec3 &to) { return camera->obstruction(from, to); });
     camera->setView(ThirdPersonCamera::View {_view->eye(), _view->aim()});

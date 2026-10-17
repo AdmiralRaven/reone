@@ -245,6 +245,22 @@ TEST(JaCamera, should_look_along_the_view_when_too_close_to_aim) {
     EXPECT_NEAR(0.0f, look.z, kTolerance);
 }
 
+TEST(JaCamera, should_keep_a_view_proportions_at_another_range) {
+    // when
+    auto shoulder = JaCamera::Settings::shoulder().atRange(112.0f);
+    auto behind = JaCamera::Settings::behind().atRange(114.0f);
+
+    // then: the sideways offset keeps its share of the range, the rest stays
+    EXPECT_FLOAT_EQ(112.0f, shoulder.range);
+    EXPECT_FLOAT_EQ(32.0f, shoulder.horzOffset);
+    EXPECT_FLOAT_EQ(4.0f, shoulder.vertOffset);
+    EXPECT_FLOAT_EQ(114.0f, behind.range);
+    EXPECT_FLOAT_EQ(0.0f, behind.horzOffset);
+    EXPECT_FLOAT_EQ(16.0f, behind.vertOffset);
+    EXPECT_FLOAT_EQ(0.3f, behind.cameraDamp);
+    EXPECT_FLOAT_EQ(0.5f, behind.targetDamp);
+}
+
 TEST(JaCamera, should_move_aim_point_and_camera_to_the_right_over_the_shoulder) {
     // given
     JaCamera camera(kEyes);

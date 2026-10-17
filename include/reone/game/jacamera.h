@@ -59,6 +59,13 @@ public:
          * into the damping; this shifts the aim point and the camera together.
          */
         static Settings shoulder();
+
+        /**
+         * The same view with the camera \p range units behind the aim point.
+         * The sideways offset keeps its share of the range, so the character
+         * stays where it was on the screen, only nearer or farther.
+         */
+        Settings atRange(float range) const;
     };
 
     /**
