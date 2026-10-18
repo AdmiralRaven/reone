@@ -15,12 +15,18 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "../fixtures/engine.h"
 #include "../fixtures/gla.h"
+#include "reone/game/action/castspellatobject.h"
+#include "reone/game/d20/spell.h"
 #include "reone/game/game.h"
 #include "reone/game/jaconsole.h"
+#include "reone/game/object/creature.h"
+#include "reone/game/object/item.h"
+#include "reone/resource/2da.h"
 #include "reone/resource/format/gffwriter.h"
 #include "reone/resource/gff.h"
 #include "reone/resource/types.h"
@@ -29,6 +35,7 @@ using namespace reone;
 using namespace reone::game;
 using namespace reone::resource;
 using namespace reone::test;
+using namespace testing;
 
 namespace {
 
@@ -90,6 +97,52 @@ void writeSaveSlot(const std::filesystem::path &directory) {
     nfoFile.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
+// The engine's mocks are shared by every test: once a test is done, the
+// engine's spells find none again, as before it.
+class SpellLookupsReset : boost::noncopyable {
+public:
+    explicit SpellLookupsReset(TestEngine &engine) :
+        _engine(engine) {
+    }
+
+    ~SpellLookupsReset() {
+        EXPECT_CALL(_engine.gameModule().spells(), get(_)).Times(AnyNumber());
+    }
+
+private:
+    TestEngine &_engine;
+};
+
+// KOTOR's medpacs cast spell 64 when used; the engine's spells say it heals.
+// Every other lookup the items make finds nothing, as the engine's mocks
+// leave it.
+std::shared_ptr<Item> healingItem(TestEngine &engine, Game &game, const std::string &tag, int stackSize) {
+    auto medpac = std::make_shared<Spell>();
+    medpac->type = static_cast<SpellType>(64);
+    EXPECT_CALL(engine.gameModule().spells(), get(_)).Times(AnyNumber()).WillRepeatedly(Return(medpac));
+    std::shared_ptr<TwoDA> baseItems = TwoDA::Builder()
+                                           .columns({"equipableslots", "bodyvar", "ammunitiontype"})
+                                           .row({"0", "", "0"})
+                                           .build();
+    EXPECT_CALL(engine.resourceModule().twoDas(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems")).Times(AnyNumber()).WillRepeatedly(Return(baseItems));
+    auto property = Gff::Builder()
+                        .field(Gff::Field::newWord("PropertyName", static_cast<uint16_t>(ItemProperty::ActivateItem)))
+                        .field(Gff::Field::newWord("Subtype", 64))
+                        .field(Gff::Field::newByte("CostTable", 3))
+                        .field(Gff::Field::newWord("CostValue", 1))
+                        .build();
+    auto uti = Gff::Builder()
+                   .field(Gff::Field::newCExoString("Tag", tag))
+                   .field(Gff::Field::newInt("BaseItem", 0))
+                   .field(Gff::Field::newWord("StackSize", static_cast<uint16_t>(stackSize)))
+                   .field(Gff::Field::newList("PropertiesList", {property}))
+                   .build();
+    auto item = game.newItem(*uti, SerializedIdentityContext::templateResource(tag));
+    item->setStackSize(stackSize);
+    return item;
+}
+
 } // namespace
 
 TEST(JaConsole, should_register_the_commands) {
@@ -99,9 +152,69 @@ TEST(JaConsole, should_register_the_commands) {
 
     registerJaConsoleCommands(game, console);
 
-    for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist"}) {
+    for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist",
+                      "jastatus", "jafight", "jause", "jahitpoints"}) {
         EXPECT_TRUE(console.hasCommand(name)) << name;
     }
+}
+
+TEST(JaConsole, should_describe_the_leader_for_scripted_checks) {
+    // given: a leader at 4 of 12 hit points, with two medpacs in one stack
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    SpellLookupsReset reset(engine);
+    auto medpacs = healingItem(engine, game, "g_i_medeqpmnt01", 2);
+    auto leader = game.newCreature();
+    leader->setTag("player");
+    leader->setMaxHitPoints(12);
+    ASSERT_EQ(12, leader->maxHitPoints());
+    leader->setCurrentHitPoints(4);
+    leader->addItem(medpacs);
+
+    // then: one line, in words a script can read
+    EXPECT_EQ(std::string("jastatus: calm: player hit points 4 of 12, combat off, movement free, items g_i_medeqpmnt01 2"),
+              jaLeaderStatus(*leader, "calm", "g_i_medeqpmnt01"));
+    EXPECT_EQ(std::string("jastatus: calm: player hit points 4 of 12, combat off, movement free"),
+              jaLeaderStatus(*leader, "calm", ""));
+    EXPECT_EQ(std::string("jastatus: calm: player hit points 4 of 12, combat off, movement free, items g_i_adrnaline003 0"),
+              jaLeaderStatus(*leader, "calm", "g_i_adrnaline003"));
+
+    // when: the leader is in combat and held in place
+    leader->activateCombat();
+    leader->setMovementRestricted(true);
+
+    // then: the line says so; tags match whatever their case
+    EXPECT_EQ(std::string("jastatus: fight: player hit points 4 of 12, combat on, movement held, items G_I_MEDEQPMNT01 2"),
+              jaLeaderStatus(*leader, "fight", "G_I_MEDEQPMNT01"));
+}
+
+TEST(JaConsole, should_use_a_healing_item_as_the_action_bar_does) {
+    // given: a leader with two medpacs in one stack
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    SpellLookupsReset reset(engine);
+    auto medpacs = healingItem(engine, game, "g_i_medeqpmnt01", 2);
+    auto leader = game.newCreature();
+    leader->addItem(medpacs);
+
+    // then: nothing happens for an item the leader hasn't
+    EXPECT_EQ(nullptr, jaUseHealingItem(game, leader, "g_i_adrnaline003"));
+    EXPECT_TRUE(leader->actions().empty());
+
+    // when: the medpacs are used
+    EXPECT_EQ(medpacs, jaUseHealingItem(game, leader, "g_i_medeqpmnt01"));
+
+    // then: the leader casts their spell from them, as a player's click does
+    ASSERT_EQ(1u, leader->actions().size());
+    std::shared_ptr<game::Action> action = leader->actions().front();
+    ASSERT_EQ(ActionType::CastSpellAtObject, action->type());
+    EXPECT_TRUE(action->isUserAction());
+    auto &cast = static_cast<CastSpellAtObjectAction &>(*action);
+    EXPECT_EQ(static_cast<SpellType>(64), cast.spell()->type);
+    ASSERT_TRUE(cast.item().has_value());
+    EXPECT_EQ(medpacs, cast.item().value());
 }
 
 TEST(JaConsole, should_number_saved_games_as_listgames_does) {
@@ -177,4 +290,12 @@ TEST(JaConsole, should_explain_what_is_missing) {
     EXPECT_NE(std::string::npos, failure(console, "japlay", {"swing", "0"}).find("Speed must be"));
     EXPECT_NE(std::string::npos, failure(console, "jasaber", {}).find("Load a game first"));
     EXPECT_NE(std::string::npos, failure(console, "jacam", {}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jastatus", {"calm"}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jafight", {}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jause", {"g_i_medeqpmnt01"}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jahitpoints", {"4"}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jastatus", {}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jafight", {"end_sith2"}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jause", {}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jahitpoints", {}).find("Usage"));
 }

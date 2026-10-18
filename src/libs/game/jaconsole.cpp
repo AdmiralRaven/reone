@@ -17,7 +17,10 @@
 
 #include "reone/game/jaconsole.h"
 
+#include "reone/game/action/attackobject.h"
+#include "reone/game/action/castspellatobject.h"
 #include "reone/game/console.h"
+#include "reone/game/d20/spell.h"
 #include "reone/game/game.h"
 #include "reone/game/jaretarget.h"
 #include "reone/game/jasaber.h"
@@ -72,6 +75,10 @@ public:
     void range(const ConsoleArgs &args);
     void click(const ConsoleArgs &args);
     void globals(const ConsoleArgs &args);
+    void status(const ConsoleArgs &args);
+    void fight(const ConsoleArgs &args);
+    void use(const ConsoleArgs &args);
+    void hitPoints(const ConsoleArgs &args);
 
 private:
     Game &_game;
@@ -80,6 +87,7 @@ private:
     JaSaber &saberControl() { return _game.jaSaber(); }
     JaLibrary &library() { return _game.jaSaber().library(); }
 
+    std::shared_ptr<Creature> partyLeader();
     std::shared_ptr<Creature> targetCreature();
     std::vector<JaSequenceStep> steps(const std::string &move, const JaSequencer &sequencer) const;
     void print(const std::string &line);
@@ -109,6 +117,18 @@ std::string describeSteps(const std::vector<JaSequenceStep> &steps) {
 void JaConsole::print(const std::string &line) {
     _console.printLine(line);
     info(line);
+}
+
+std::shared_ptr<Creature> JaConsole::partyLeader() {
+    auto module = _game.module();
+    if (!module || !module->area()) {
+        throw std::runtime_error("Load a game first");
+    }
+    auto leader = _game.party().getLeader();
+    if (!leader) {
+        throw std::runtime_error("No party leader");
+    }
+    return leader;
 }
 
 std::shared_ptr<Creature> JaConsole::targetCreature() {
@@ -520,6 +540,127 @@ void JaConsole::globals(const ConsoleArgs &args) {
     }
 }
 
+void JaConsole::status(const ConsoleArgs &args) {
+    if (args.size() < 2 || args.size() > 3) {
+        throw std::runtime_error("Usage: jastatus <label> [item tag]");
+    }
+    auto leader = partyLeader();
+    print(jaLeaderStatus(*leader, std::string(*args[1]), args.size() == 3 ? std::string(*args[2]) : std::string()));
+}
+
+void JaConsole::fight(const ConsoleArgs &args) {
+    if (args.size() != 1) {
+        throw std::runtime_error("Usage: jafight");
+    }
+    auto leader = partyLeader();
+    auto module = _game.module();
+    std::shared_ptr<Area> area = module->area();
+    // A player can't click during a conversation.
+    if (_game.isConversationActive()) {
+        print("jafight: a conversation is on");
+        return;
+    }
+    // A player leaves the leader to an attack on an enemy still standing.
+    if (std::shared_ptr<Action> current = leader->getCurrentAction()) {
+        if (auto *attack = dyn_cast<AttackObjectAction>(current.get())) {
+            std::shared_ptr<Object> target = attack->target();
+            auto enemy = target ? dyn_cast<Creature>(target) : nullptr;
+            if (enemy && module->isHostileToPartyLeader(*enemy)) {
+                print("jafight: still attacking " + enemy->tag());
+                return;
+            }
+        }
+    }
+    // Otherwise, a click on the nearest enemy the leader sees.
+    std::shared_ptr<Creature> nearest;
+    float nearestDistance = std::numeric_limits<float>::max();
+    for (const std::shared_ptr<Object> &object : area->getObjectsByType(ObjectType::Creature)) {
+        auto creature = std::static_pointer_cast<Creature>(object);
+        if (creature == leader ||
+            creature->isTemporarilyDead() ||
+            !module->isHostileToPartyLeader(*creature) ||
+            !leader->perception().sees(creature->id()) ||
+            !area->isObjectSeen(*leader, *creature)) {
+            continue;
+        }
+        float distance = leader->getDistanceTo(*creature);
+        if (distance < nearestDistance) {
+            nearest = std::move(creature);
+            nearestDistance = distance;
+        }
+    }
+    if (!nearest) {
+        print("jafight: no living enemy in sight");
+        return;
+    }
+    area->selectObject(nearest, /*force=*/true);
+    module->onObjectClick(nearest);
+    print(str(boost::format("jafight: attacking %s, %.2f m away") % nearest->tag() % nearestDistance));
+}
+
+void JaConsole::use(const ConsoleArgs &args) {
+    if (args.size() != 2) {
+        throw std::runtime_error("Usage: jause <item tag>");
+    }
+    auto leader = partyLeader();
+    std::string tag(*args[1]);
+    std::shared_ptr<Item> item = jaUseHealingItem(_game, leader, tag);
+    if (!item) {
+        throw std::runtime_error("No healing item tagged " + tag + " on " + leader->tag());
+    }
+    const Spell &spell = *leader->itemAttributes().healingSpells().at(item);
+    print(str(boost::format("jause: %s, %d in its stack, spell %d, on %s at %d of %d hit points") %
+              item->tag() % item->stackSize() % static_cast<int>(spell.type) %
+              leader->tag() % leader->currentHitPoints() % leader->maxHitPoints()));
+}
+
+void JaConsole::hitPoints(const ConsoleArgs &args) {
+    if (args.size() != 2) {
+        throw std::runtime_error("Usage: jahitpoints <points>");
+    }
+    auto leader = partyLeader();
+    auto points = args.get<int>(1);
+    if (!points || *points < 1 || *points > leader->maxHitPoints()) {
+        throw std::runtime_error(str(boost::format("Hit points must be a whole number from 1 to %d") %
+                                     leader->maxHitPoints()));
+    }
+    leader->setCurrentHitPoints(*points);
+    print(str(boost::format("jahitpoints: %s hit points %d of %d") %
+              leader->tag() % leader->currentHitPoints() % leader->maxHitPoints()));
+}
+
+std::string jaLeaderStatus(const Creature &leader, const std::string &label, const std::string &itemTag) {
+    std::string line = str(boost::format("jastatus: %s: %s hit points %d of %d, combat %s, movement %s") %
+                           label % leader.tag() % leader.currentHitPoints() % leader.maxHitPoints() %
+                           (leader.isInCombat() ? "on" : "off") %
+                           (leader.isMovementRestricted() ? "held" : "free"));
+    if (!itemTag.empty()) {
+        int count = 0;
+        for (const auto &[item, spell] : leader.itemAttributes().healingSpells()) {
+            if (boost::iequals(item->tag(), itemTag)) {
+                count += item->stackSize();
+            }
+        }
+        line += str(boost::format(", items %s %d") % itemTag % count);
+    }
+    return line;
+}
+
+std::shared_ptr<Item> jaUseHealingItem(Game &game, const std::shared_ptr<Creature> &creature, const std::string &itemTag) {
+    for (const auto &[item, spell] : creature->itemAttributes().healingSpells()) {
+        if (!boost::iequals(item->tag(), itemTag)) {
+            continue;
+        }
+        // As ActionBar::handleMouseButtonDown does.
+        std::shared_ptr<Action> action = game.newAction<CastSpellAtObjectAction>(
+            spell, creature, std::optional<std::shared_ptr<Item>>(item));
+        action->setUserAction(true);
+        creature->addAction(std::move(action));
+        return item;
+    }
+    return nullptr;
+}
+
 void registerJaConsoleCommands(Game &game, IConsole &console) {
     auto tool = std::make_shared<JaConsole>(game, console);
     // The console shows a failed command's message but does not log it; log
@@ -564,6 +705,14 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jaclick", &JaConsole::click));
     console.registerCommand("jaglobals", "log global variables: jaglobals [name prefix]",
                             logged("jaglobals", &JaConsole::globals));
+    console.registerCommand("jastatus", "log the party leader's hit points, combat, movement and healing items with a tag: jastatus <label> [item tag]",
+                            logged("jastatus", &JaConsole::status));
+    console.registerCommand("jafight", "attack the nearest living enemy the party leader sees, as a click on it does: jafight",
+                            logged("jafight", &JaConsole::fight));
+    console.registerCommand("jause", "use a healing item on the party leader, as a click on the action bar's slot does: jause <item tag>",
+                            logged("jause", &JaConsole::use));
+    console.registerCommand("jahitpoints", "set the party leader's hit points, without the scripts damage runs: jahitpoints <points>",
+                            logged("jahitpoints", &JaConsole::hitPoints));
 }
 
 } // namespace game

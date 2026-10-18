@@ -17,12 +17,17 @@
 
 #pragma once
 
+#include <memory>
+#include <string>
+
 namespace reone {
 
 namespace game {
 
+class Creature;
 class Game;
 class IConsole;
+class Item;
 
 /**
  * Developer console commands that play Jedi Academy's animations on KOTOR
@@ -46,9 +51,35 @@ class IConsole;
  * - jamouse [radians]: show or set how far saber mode turns per unit of
  *   mouse movement.
  *
+ * And, for scripted checks of KOTOR's own play:
+ *
+ * - jastatus <label> [item tag]: log jaLeaderStatus for the party leader;
+ * - jafight: attack the nearest living enemy the party leader sees, as a
+ *   click on it does, unless the leader is attacking a living enemy already;
+ * - jause <item tag>: use a healing item on the party leader, as
+ *   jaUseHealingItem does;
+ * - jahitpoints <points>: set the party leader's hit points, without the
+ *   scripts damage would run.
+ *
  * The JA animations are those of Game::jaSaber()'s library.
  */
 void registerJaConsoleCommands(Game &game, IConsole &console);
+
+/**
+ * One line on a party leader for scripted checks: its hit points, whether it
+ * is in combat (the HUD shows its combat panel exactly while the leader is),
+ * whether it can move, and, given an item tag, how many of the healing items
+ * with that tag the action bar offers it. For example: "jastatus: calm: player
+ * hit points 4 of 12, combat off, movement free, items g_i_medeqpmnt01 2".
+ */
+std::string jaLeaderStatus(const Creature &leader, const std::string &label, const std::string &itemTag);
+
+/**
+ * Queues the use of the creature's healing item with the tag on the creature
+ * itself, as a click on the action bar's healing slot does, and returns the
+ * item; or returns null when none of its healing items has the tag.
+ */
+std::shared_ptr<Item> jaUseHealingItem(Game &game, const std::shared_ptr<Creature> &creature, const std::string &itemTag);
 
 } // namespace game
 
