@@ -25,12 +25,15 @@
 #include "../fixtures/engine.h"
 #include "reone/game/animations.h"
 #include "reone/game/action/attackobject.h"
+#include "reone/game/action/castspellatobject.h"
 #include "reone/game/action/followleader.h"
 #include "reone/game/action/startconversation.h"
 #include "reone/game/action/usetalentonobject.h"
 #include "reone/game/action/usefeat.h"
 #include "reone/game/game.h"
 #include "reone/game/attack.h"
+#include "reone/game/d20/spell.h"
+#include "reone/game/object/item.h"
 #include "reone/game/party.h"
 #include "reone/game/script/routines.h"
 #include "reone/resource/types.h"
@@ -760,4 +763,294 @@ TEST(AttackImpactTiming, melee_damage_waits_for_the_authored_impact) {
     EXPECT_EQ(1u, attacks.signalReadyMelee(
         500, game, engine.services(), *attacker, *target));
     EXPECT_LT(target->currentHitPoints(), 20);
+}
+
+namespace {
+
+constexpr float kTick = 1.0f / 60.0f;
+
+void play(Game &game, const std::vector<std::shared_ptr<Creature>> &creatures, float seconds) {
+    for (float time = 0.0f; time < seconds; time += kTick) {
+        game.combat().update(kTick);
+        for (const auto &creature : creatures) {
+            creature->update(kTick);
+        }
+    }
+}
+
+// KOTOR's medpac: spell 64 (ITEM_ABILITY_MED_PACK), cast in 0.17 s and
+// 1.33 s, its effect in an impact script (k_sup_healing in the game).
+std::shared_ptr<Spell> medpacSpell() {
+    auto spell = std::make_shared<Spell>();
+    spell->type = static_cast<SpellType>(64);
+    spell->impactScript = "k_test_medpac";
+    spell->conjTime = 0.17f;
+    spell->castTime = 1.33f;
+    return spell;
+}
+
+// The engine's mocks are shared by every test, and some tests leave
+// expectations on them that would turn the lookups a cast makes into
+// unexpected calls. These take every such lookup, and count the runs of the
+// medpac's script.
+std::shared_ptr<int> expectCastLookups(TestEngine &engine) {
+    EXPECT_CALL(engine.resourceModule().twoDas(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(engine.gameModule().spells(), get(_)).Times(AnyNumber());
+    EXPECT_CALL(engine.resourceModule().scripts(), get(_)).Times(AnyNumber());
+    auto runs = std::make_shared<int>(0);
+    EXPECT_CALL(engine.resourceModule().scripts(), get("k_test_medpac"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Invoke([runs](const std::string &) {
+            ++*runs;
+            return std::shared_ptr<script::ScriptProgram>();
+        }));
+    return runs;
+}
+
+// A single-use item that casts the medpac, as KOTOR's medpacs are.
+std::shared_ptr<Item> medpacItem(TestEngine &engine, Game &game, int stackSize) {
+    std::shared_ptr<resource::TwoDA> baseItems = resource::TwoDA::Builder()
+                                                     .columns({"equipableslots", "bodyvar", "ammunitiontype"})
+                                                     .row({"0", "", "0"})
+                                                     .build();
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems")).Times(AnyNumber()).WillRepeatedly(Return(baseItems));
+    auto property = resource::Gff::Builder()
+                        .field(resource::Gff::Field::newWord("PropertyName", static_cast<uint16_t>(ItemProperty::ActivateItem)))
+                        .field(resource::Gff::Field::newWord("Subtype", 64))
+                        .field(resource::Gff::Field::newByte("CostTable", 3))
+                        .field(resource::Gff::Field::newWord("CostValue", 1))
+                        .build();
+    auto uti = resource::Gff::Builder()
+                   .field(resource::Gff::Field::newInt("BaseItem", 0))
+                   .field(resource::Gff::Field::newWord("StackSize", static_cast<uint16_t>(stackSize)))
+                   .field(resource::Gff::Field::newList("PropertiesList", {property}))
+                   .build();
+    auto item = game.newItem(*uti, SerializedIdentityContext::templateResource("g_i_medeqpmnt01"));
+    item->setStackSize(stackSize);
+    return item;
+}
+
+} // namespace
+
+TEST(CombatEnd, should_end_combat_after_a_kill_cuts_the_last_round_short) {
+    // given: an attack in its round
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto attacker = game.newCreature();
+    auto target = game.newCreature();
+    target->setCurrentHitPoints(1);
+    auto attack = game.newAction<AttackObjectAction>(target);
+    attacker->addAction(attack);
+    game.combat().addAction(attack, *attacker);
+    ASSERT_TRUE(attacker->isInCombat());
+
+    // when: the target dies mid-round, and the attack, with nothing left to
+    // hit, ends before its round does, as AttackObjectAction::execute ends it
+    target->damage(std::numeric_limits<int>::max(), attacker);
+    attack->complete();
+    game.combat().update(kTick);
+    ASSERT_EQ(0u, game.combat().roundCount());
+    play(game, {attacker, target}, 10.0f);
+
+    // then: no fight goes on, so combat ends
+    EXPECT_FALSE(attacker->isInCombat());
+}
+
+TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_a_kill_leaves_no_enemy) {
+    // given: the party leader attacking the last enemy, with no area around
+    // in which to find another
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto leader = game.newCreature();
+    leader->setCurrentHitPoints(10);
+    game.party().addMember(kNpcPlayer, leader);
+    ASSERT_EQ(leader, game.party().getLeader());
+    auto enemy = game.newCreature();
+    enemy->setCurrentHitPoints(1);
+    auto attack = game.newAction<AttackObjectAction>(enemy);
+    leader->addAction(attack);
+    game.combat().addAction(attack, *leader);
+
+    // when: the leader's blow kills it mid-round, ending the attack early
+    enemy->damage(std::numeric_limits<int>::max(), leader);
+    attack->complete();
+    game.combat().update(kTick);
+
+    // then: as after a finished round, the leader leaves combat at once
+    EXPECT_FALSE(leader->isInCombat());
+}
+
+TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_its_round_ends_on_a_fallen_enemy) {
+    // given: the party leader's round against an enemy that falls before
+    // the round's end
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto leader = game.newCreature();
+    leader->setCurrentHitPoints(10);
+    game.party().addMember(kNpcPlayer, leader);
+    auto enemy = game.newCreature();
+    auto attack = game.newAction<AttackObjectAction>(enemy);
+    leader->addAction(attack);
+    game.combat().addAction(attack, *leader);
+    enemy->damage(std::numeric_limits<int>::max(), leader);
+
+    // when: the round runs to its end
+    for (float time = 0.0f; time < 3.1f; time += kTick) {
+        game.combat().update(kTick);
+    }
+
+    // then: with no enemy left, the leader leaves combat at once
+    EXPECT_FALSE(leader->isInCombat());
+}
+
+TEST(CombatEnd, should_leave_the_leader_alone_when_its_actions_are_cleared_mid_round) {
+    // given: the party leader's attack on a fallen enemy, mid-round
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto leader = game.newCreature();
+    leader->setCurrentHitPoints(10);
+    game.party().addMember(kNpcPlayer, leader);
+    auto enemy = game.newCreature();
+    auto attack = game.newAction<AttackObjectAction>(enemy);
+    leader->addAction(attack);
+    game.combat().addAction(attack, *leader);
+    enemy->damage(std::numeric_limits<int>::max(), leader);
+
+    // when: something else clears the leader's actions, as scripts do
+    leader->clearAllActions(/*force=*/true);
+    game.combat().update(kTick);
+    ASSERT_EQ(0u, game.combat().roundCount());
+
+    // then: no follow-up of the round, only the end of combat after the delay
+    EXPECT_TRUE(leader->isInCombat());
+    play(game, {leader}, 10.0f);
+    EXPECT_FALSE(leader->isInCombat());
+}
+
+TEST(CombatEnd, should_keep_combat_while_another_round_goes_on) {
+    // given: two attackers on one target, the first one's round cut short
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto first = game.newCreature();
+    auto second = game.newCreature();
+    auto target = game.newCreature();
+    auto firstAttack = game.newAction<AttackObjectAction>(target);
+    first->addAction(firstAttack);
+    game.combat().addAction(firstAttack, *first);
+    firstAttack->complete();
+    game.combat().update(kTick);
+    ASSERT_EQ(0u, game.combat().roundCount());
+
+    // when: the target is attacked again, in round after round
+    for (int round = 0; round < 4; ++round) {
+        auto attack = game.newAction<AttackObjectAction>(target);
+        second->addAction(attack);
+        game.combat().addAction(attack, *second);
+        play(game, {target}, 2.9f);
+        second->clearAllActions(/*force=*/true);
+        game.combat().update(kTick);
+    }
+
+    // then: the target stays in combat
+    EXPECT_TRUE(target->isInCombat());
+}
+
+TEST(CastSpellFromItem, should_run_the_spell_when_its_last_item_is_used_up) {
+    // given: one medpac
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    game.initLocalServices();
+    auto scriptRuns = expectCastLookups(engine);
+    auto user = game.newCreature();
+    auto medpac = medpacItem(engine, game, 1);
+    user->addItem(medpac);
+    auto cast = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpac));
+    cast->setUserAction(true);
+    user->addAction(cast);
+
+    // when: it is used, and a round has gone by
+    play(game, {user}, 4.0f);
+
+    // then: the spell's script ran, the medpac is gone, and the user moves again
+    EXPECT_EQ(1, *scriptRuns);
+    EXPECT_TRUE(cast->isCompleted());
+    EXPECT_FALSE(cast->isCancelled());
+    EXPECT_TRUE(user->items().empty());
+    EXPECT_FALSE(user->isMovementRestricted());
+}
+
+TEST(CastSpellFromItem, should_run_the_spell_and_keep_the_rest_of_a_stack) {
+    // given: two medpacs in one stack
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    game.initLocalServices();
+    auto scriptRuns = expectCastLookups(engine);
+    auto user = game.newCreature();
+    auto medpacs = medpacItem(engine, game, 2);
+    user->addItem(medpacs);
+    auto cast = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpacs));
+    user->addAction(cast);
+
+    // when
+    play(game, {user}, 4.0f);
+
+    // then
+    EXPECT_EQ(1, *scriptRuns);
+    EXPECT_FALSE(cast->isCancelled());
+    ASSERT_EQ(1u, user->items().size());
+    EXPECT_EQ(1, user->items().front()->stackSize());
+}
+
+TEST(CastSpellFromItem, should_let_the_caster_move_again_when_a_cast_is_cancelled) {
+    // given: a medpac being used
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    game.initLocalServices();
+    expectCastLookups(engine);
+    auto user = game.newCreature();
+    auto medpacs = medpacItem(engine, game, 2);
+    user->addItem(medpacs);
+    auto cast = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpacs));
+    user->addAction(cast);
+    play(game, {user}, 0.5f);
+    ASSERT_TRUE(user->isMovementRestricted());
+
+    // when: the cast is cancelled, as a combat round does when it is cut short
+    cast->cancel(cast, *user);
+
+    // then
+    EXPECT_FALSE(user->isMovementRestricted());
+}
+
+TEST(CastSpellFromItem, should_not_cast_from_an_item_gone_before_its_use) {
+    // given: a medpac queued for use, then gone before the cast starts
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    game.initLocalServices();
+    auto scriptRuns = expectCastLookups(engine);
+    auto user = game.newCreature();
+    auto medpac = medpacItem(engine, game, 1);
+    user->addItem(medpac);
+    auto cast = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpac));
+    user->addAction(cast);
+    bool last = false;
+    ASSERT_TRUE(user->removeItem(medpac, last));
+    game.destroyRuntimeObjectGraph(medpac);
+
+    // when
+    play(game, {user}, 4.0f);
+
+    // then: no cast, and the user is free to move
+    EXPECT_EQ(0, *scriptRuns);
+    EXPECT_TRUE(cast->isCancelled());
+    EXPECT_FALSE(user->isMovementRestricted());
 }

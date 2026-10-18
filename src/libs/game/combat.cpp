@@ -158,6 +158,92 @@ static std::shared_ptr<Creature> findNearestEnemy(
     return nearest;
 }
 
+// After a round the party leader attacked in: the leader goes on attacking a
+// hostile target still standing, or attacks the nearest enemy when the target
+// fell, and leaves combat when none is left.
+static void followUpLeaderAttack(Game &game, ServicesView &services, CombatRound &round) {
+    std::shared_ptr<Creature> leader = game.party().getLeader();
+    if (!leader || !game.isRuntimeObjectLive(*leader) ||
+        isUnavailableAttackTarget(*leader)) {
+        return;
+    }
+
+    for (CombatRound::RoundAction &action : round.actions) {
+        if (action.attacker.resolve().get() != leader.get()) {
+            continue;
+        }
+
+        if (leader->hasUserActionsPending(action.action.get())) {
+            continue;
+        }
+
+        std::shared_ptr<Module> module = game.module();
+
+        std::shared_ptr<Object> target = action.target.resolve();
+        auto targetCreature = target ? dyn_cast<Creature>(target) : nullptr;
+        bool targetUnavailable = !targetCreature || isUnavailableAttackTarget(*targetCreature);
+        if (!targetUnavailable) {
+            if (leader->getCurrentAction() != action.action) {
+                continue;
+            }
+            if (!module || !module->isHostileToPartyLeader(*targetCreature)) {
+                continue;
+            }
+
+            leader->addAction(game.newAction<AttackObjectAction>(std::move(target)));
+            continue;
+        }
+
+        if (!isa<AttackObjectAction>(action.action.get()) &&
+            !isa<UseFeatAction>(action.action.get())) {
+            continue;
+        }
+
+        std::shared_ptr<Creature> enemy;
+        std::shared_ptr<Area> area = module ? module->area() : nullptr;
+        if (area) {
+            float searchRange = getAttackTargetSearchRange(*leader);
+            if (targetCreature) {
+                enemy = findNearestEnemy(
+                    *area,
+                    *leader,
+                    *targetCreature,
+                    searchRange,
+                    services.game.reputes);
+            }
+            if (!enemy) {
+                enemy = findNearestEnemy(
+                    *area,
+                    *leader,
+                    *leader,
+                    searchRange,
+                    services.game.reputes);
+            }
+        }
+
+        if (enemy) {
+            leader->addAction(game.newAction<AttackObjectAction>(std::move(enemy)));
+        } else {
+            leader->deactivateCombat(0.0f);
+        }
+    }
+}
+
+// A round cut short, as when a kill ends an attack before its round does, ends
+// its participants' combat as a finished round does, after the same delay. A
+// round they take part in meanwhile keeps them in combat (#31).
+static void deactivateParticipants(CombatRound &round) {
+    SmallSet<Creature *, 4> seen;
+    for (CombatRound::RoundAction &action : round.actions) {
+        std::shared_ptr<Object> participants[] {action.attacker.resolve(), action.target.resolve()};
+        for (const std::shared_ptr<Object> &object : participants) {
+            if (object && isa<Creature>(object) && seen.insert(&cast<Creature>(*object)).second) {
+                cast<Creature>(*object).deactivateCombat(kDeactivateDelay);
+            }
+        }
+    }
+}
+
 CombatRound *Combat::findRoundForAction(
     const std::shared_ptr<Action> &action, const Creature &attacker) {
 
@@ -315,6 +401,12 @@ void Combat::pruneInvalidRounds() {
         if (!bindingsLive ||
             (round.state != CombatRound::Finished && anyActionFinished)) {
             cancelRound(round);
+            deactivateParticipants(round);
+            if (bindingsLive) {
+                // An action ended before its round, as an attack does when
+                // its target falls: what follows is what follows a round.
+                followUpLeaderAttack(_game, _services, round);
+            }
             it = _rounds.erase(it);
         } else if (round.state == CombatRound::Finished && actionsFinished) {
             it = _rounds.erase(it);
@@ -395,70 +487,7 @@ void Combat::finishRound(CombatRound &round) {
         }
     }
 
-    if (!leader || !_game.isRuntimeObjectLive(*leader) ||
-        isUnavailableAttackTarget(*leader)) {
-        return;
-    }
-
-    for (CombatRound::RoundAction &action : round.actions) {
-        if (action.attacker.resolve().get() != leader.get()) {
-            continue;
-        }
-
-        if (leader->hasUserActionsPending(action.action.get())) {
-            continue;
-        }
-
-        std::shared_ptr<Module> module = _game.module();
-
-        std::shared_ptr<Object> target = action.target.resolve();
-        auto targetCreature = target ? dyn_cast<Creature>(target) : nullptr;
-        bool targetUnavailable = !targetCreature || isUnavailableAttackTarget(*targetCreature);
-        if (!targetUnavailable) {
-            if (leader->getCurrentAction() != action.action) {
-                continue;
-            }
-            if (!module || !module->isHostileToPartyLeader(*targetCreature)) {
-                continue;
-            }
-
-            leader->addAction(_game.newAction<AttackObjectAction>(std::move(target)));
-            continue;
-        }
-
-        if (!isa<AttackObjectAction>(action.action.get()) &&
-            !isa<UseFeatAction>(action.action.get())) {
-            continue;
-        }
-
-        std::shared_ptr<Creature> enemy;
-        std::shared_ptr<Area> area = module ? module->area() : nullptr;
-        if (area) {
-            float searchRange = getAttackTargetSearchRange(*leader);
-            if (targetCreature) {
-                enemy = findNearestEnemy(
-                    *area,
-                    *leader,
-                    *targetCreature,
-                    searchRange,
-                    _services.game.reputes);
-            }
-            if (!enemy) {
-                enemy = findNearestEnemy(
-                    *area,
-                    *leader,
-                    *leader,
-                    searchRange,
-                    _services.game.reputes);
-            }
-        }
-
-        if (enemy) {
-            leader->addAction(_game.newAction<AttackObjectAction>(std::move(enemy)));
-        } else {
-            leader->deactivateCombat(0.0f);
-        }
-    }
+    followUpLeaderAttack(_game, _services, round);
 }
 
 } // namespace game

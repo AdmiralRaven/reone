@@ -91,6 +91,17 @@ void CastSpellAtObjectAction::execute(std::shared_ptr<Action> self, Object &acto
                 finish(caster);
                 return;
             }
+            // The item is spent: the cast no longer needs it, and goes on to
+            // its effect when the last of a stack is gone (#31).
+            uint64_t spent = _item.value()->runtimeIncarnation();
+            _runtimeDependencies.erase(
+                std::remove_if(
+                    _runtimeDependencies.begin(),
+                    _runtimeDependencies.end(),
+                    [spent](const RuntimeObjectRef<Object> &dependency) {
+                        return dependency.incarnation() == spent;
+                    }),
+                _runtimeDependencies.end());
             if (lastItem) {
                 _game.destroyRuntimeObjectGraph(_item.value());
             }
@@ -135,6 +146,11 @@ void CastSpellAtObjectAction::execute(std::shared_ptr<Action> self, Object &acto
     default:
         break;
     }
+}
+
+void CastSpellAtObjectAction::cancel(std::shared_ptr<Action> self, Object &actor) {
+    // A cast cut short lets its caster move again, as one that finishes does.
+    finish(cast<Creature>(actor));
 }
 
 void CastSpellAtObjectAction::finish(Creature &caster) {

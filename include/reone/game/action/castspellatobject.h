@@ -43,6 +43,7 @@ public:
     }
 
     void execute(std::shared_ptr<Action> self, Object &actor, float dt) override;
+    void cancel(std::shared_ptr<Action> self, Object &actor) override;
     void finish(Creature &caster);
 
     const std::shared_ptr<Spell> &spell() const { return _spell; }
