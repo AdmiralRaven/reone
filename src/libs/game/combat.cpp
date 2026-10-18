@@ -382,17 +382,35 @@ void Combat::cancelRound(CombatRound &round) {
     }
 }
 
+static bool isActionBound(const CombatRound::RoundAction &action) {
+    return action.participantBindingsLive() &&
+           action.remainsInActorQueue() &&
+           action.action->runtimeDependenciesLive();
+}
+
+// Whether the party leader acts in the round, with its action still in its
+// queue and bound to live objects: the round then ended early around it, as
+// when its target falls, and nothing took the action away (#31).
+static bool isLeaderActionBound(Game &game, const CombatRound &round) {
+    std::shared_ptr<Creature> leader = game.party().getLeader();
+    if (!leader) {
+        return false;
+    }
+    return std::any_of(
+        round.actions.begin(),
+        round.actions.end(),
+        [&leader](const CombatRound::RoundAction &action) {
+            return action.attacker.resolve().get() == leader.get() &&
+                   isActionBound(action);
+        });
+}
+
 void Combat::pruneInvalidRounds() {
     for (auto it = _rounds.begin(); it != _rounds.end();) {
         CombatRound &round = **it;
         bool bindingsLive = std::all_of(
-            round.actions.begin(),
-            round.actions.end(),
-            [](const CombatRound::RoundAction &action) {
-                return action.participantBindingsLive() &&
-                       action.remainsInActorQueue() &&
-                       action.action->runtimeDependenciesLive();
-            });
+            round.actions.begin(), round.actions.end(), isActionBound);
+        bool leaderActionBound = isLeaderActionBound(_game, round);
         bool anyActionFinished = std::any_of(
             round.actions.begin(), round.actions.end(), isActionFinished);
         bool actionsFinished = std::all_of(
@@ -402,9 +420,10 @@ void Combat::pruneInvalidRounds() {
             (round.state != CombatRound::Finished && anyActionFinished)) {
             cancelRound(round);
             deactivateParticipants(round);
-            if (bindingsLive) {
-                // An action ended before its round, as an attack does when
-                // its target falls: what follows is what follows a round.
+            if (leaderActionBound) {
+                // The round ended before its time around the leader's
+                // action, as when its target, or the enemy it duels, falls:
+                // what follows is what follows a round.
                 followUpLeaderAttack(_game, _services, round);
             }
             it = _rounds.erase(it);

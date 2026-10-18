@@ -882,6 +882,39 @@ TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_a_kill_leaves_no_enem
     EXPECT_FALSE(leader->isInCombat());
 }
 
+TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_a_kill_ends_a_duel) {
+    // given: the party leader and the last enemy attacking each other, in one
+    // round
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto leader = game.newCreature();
+    leader->setCurrentHitPoints(10);
+    game.party().addMember(kNpcPlayer, leader);
+    auto enemy = game.newCreature();
+    enemy->setCurrentHitPoints(1);
+    auto attack = game.newAction<AttackObjectAction>(enemy);
+    leader->addAction(attack);
+    game.combat().addAction(attack, *leader);
+    auto counter = game.newAction<AttackObjectAction>(leader);
+    enemy->addAction(counter);
+    game.combat().addAction(counter, *enemy);
+    ASSERT_EQ(1u, game.combat().roundCount());
+
+    // when: the leader's blow kills it mid-round; a dead creature's update
+    // clears its actions, and the leader's attack, with nothing left to hit,
+    // ends early
+    enemy->damage(std::numeric_limits<int>::max(), leader);
+    enemy->update(kTick);
+    ASSERT_TRUE(enemy->actions().empty());
+    attack->complete();
+    game.combat().update(kTick);
+    ASSERT_EQ(0u, game.combat().roundCount());
+
+    // then: as after a finished round, the leader leaves combat at once
+    EXPECT_FALSE(leader->isInCombat());
+}
+
 TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_its_round_ends_on_a_fallen_enemy) {
     // given: the party leader's round against an enemy that falls before
     // the round's end
