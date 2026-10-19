@@ -361,7 +361,7 @@ TEST(JaSaberDriver, should_attack_on_the_torso_while_the_legs_run_on) {
     EXPECT_FLOAT_EQ(driver.animator().clipTime(JaBodyAnimator::kLegs), driver.animator().clipTime(JaBodyAnimator::kTorso));
 }
 
-TEST(JaSaberDriver, should_attack_on_the_whole_body_standing_and_hold_the_legs_for_the_move) {
+TEST(JaSaberDriver, should_attack_on_the_whole_body_standing_and_run_on_at_once) {
     // given: standing in the stance
     SaberBody body;
     JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
@@ -381,55 +381,74 @@ TEST(JaSaberDriver, should_attack_on_the_whole_body_standing_and_hold_the_legs_f
     EXPECT_EQ(clip, driver.animator().clip(JaBodyAnimator::kTorso));
 
     // when: running forward while the start plays
-    float held = 0.0f;
-    for (int tick = 0; tick < 120; ++tick) {
-        step = driver.step(kTick, holding(false, 1, 0), false, 5.0f);
-        EXPECT_TRUE(step.moving);
-        if (driver.animator().clip(JaBodyAnimator::kLegs) != clip) {
-            break;
-        }
-        held += kTick;
-    }
+    step = driver.step(kTick, holding(false, 1, 0), false, 5.0f);
 
-    // then: the character moves at once, but the start holds the legs for its
-    // hold, and then they run
-    EXPECT_NEAR(driver.machine().timing(start).holdMs / 1000.0f, held, kTick);
+    // then: moving takes the legs from the start at once, its hold
+    // notwithstanding, and they run at full speed while the torso plays the
+    // start on
+    EXPECT_TRUE(step.moving);
+    EXPECT_TRUE(step.started.empty());
     EXPECT_EQ(std::string("BOTH_RUN2"), driver.animator().clip(JaBodyAnimator::kLegs));
+    EXPECT_TRUE(driver.animator().isBlending(JaBodyAnimator::kLegs));
+    EXPECT_EQ(clip, driver.animator().clip(JaBodyAnimator::kTorso));
+    EXPECT_FLOAT_EQ(1.0f, step.speedScale);
 }
 
-TEST(JaSaberDriver, should_stand_the_legs_while_the_torso_plays_its_move_out) {
+TEST(JaSaberDriver, should_join_the_legs_to_the_torsos_move_on_standing_still) {
     // given: an attack started on the run
     SaberBody body;
     JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
     driver.start(body.rest());
     driver.step(kTick, holding(false, 1, 0), false, 5.0f);
     driver.step(kTick, holding(true, 1, 0), false, 5.0f);
+    driver.step(kTick, holding(false, 1, 0), false, 5.0f);
     std::string torso(driver.animator().clip(JaBodyAnimator::kTorso));
     ASSERT_EQ(std::string("BOTH_S1_S1_T_"), torso);
+    ASSERT_EQ(std::string("BOTH_RUN2"), driver.animator().clip(JaBodyAnimator::kLegs));
 
     // when: letting go of the movement
     auto step = driver.step(kTick, JaSaberInput(), false, 5.0f);
 
-    // then: the legs go back into the stance while the torso plays on
+    // then: the legs take up the torso's move where the torso is, blending
+    // into it, while the torso plays on
     EXPECT_FALSE(step.moving);
-    EXPECT_EQ(std::string("BOTH_SABERFAST_STANCE"), driver.animator().clip(JaBodyAnimator::kLegs));
+    EXPECT_EQ(torso, driver.animator().clip(JaBodyAnimator::kLegs));
     EXPECT_EQ(torso, driver.animator().clip(JaBodyAnimator::kTorso));
+    EXPECT_FLOAT_EQ(driver.animator().clipTime(JaBodyAnimator::kTorso), driver.animator().clipTime(JaBodyAnimator::kLegs));
+    EXPECT_TRUE(driver.animator().isBlending(JaBodyAnimator::kLegs));
+
+    // when: standing on until back in the stance
+    const auto &moves = JaSaberMoves::fast();
+    std::vector<std::string> played;
+    for (int tick = 0; tick < 120 && moves.move(driver.machine().move()).kind != JaMoveKind::Ready; ++tick) {
+        for (int id : driver.step(kTick, JaSaberInput(), false, 5.0f).started) {
+            played.push_back(moves.move(id).name);
+        }
+        // then: the legs play the torso's moves with it
+        EXPECT_EQ(driver.animator().clip(JaBodyAnimator::kTorso), driver.animator().clip(JaBodyAnimator::kLegs));
+    }
+
+    // and the attack, its return and the stance follow, on the whole body
+    EXPECT_EQ(std::vector<std::string>({"LS_A_T2B", "LS_R_T2B", "LS_READY"}), played);
+    EXPECT_EQ(std::string("BOTH_SABERFAST_STANCE"), driver.animator().clip(JaBodyAnimator::kLegs));
+    EXPECT_EQ(std::string("BOTH_SABERFAST_STANCE"), driver.animator().clip(JaBodyAnimator::kTorso));
 }
 
 TEST(JaSaberDriver, should_move_backwards_at_three_quarters_of_its_speed_during_an_attack) {
-    // given: running backwards
+    // given: walking backwards, which alone keeps full speed
     SaberBody body;
     JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
     driver.start(body.rest());
-    auto step = driver.step(kTick, holding(false, -1, 0), false, 5.0f);
-    EXPECT_EQ(std::string("BOTH_RUNBACK2"), driver.animator().clip(JaBodyAnimator::kLegs));
+    auto step = driver.step(kTick, holding(false, -1, 0), true, 1.5f);
+    EXPECT_EQ(std::string("BOTH_WALKBACK2"), driver.animator().clip(JaBodyAnimator::kLegs));
     EXPECT_FLOAT_EQ(1.0f, step.speedScale);
 
-    // when: attacking on the way back, then holding still, until the stance
+    // when: attacking on the way back, then letting go of the button, until
+    // the stance
     std::map<JaMoveKind, std::set<float>> scales;
-    driver.step(kTick, holding(true, -1, 0), false, 5.0f);
+    driver.step(kTick, holding(true, -1, 0), true, 1.5f);
     for (int tick = 0; tick < 120; ++tick) {
-        step = driver.step(kTick, holding(false, -1, 0), false, 5.0f);
+        step = driver.step(kTick, holding(false, -1, 0), true, 1.5f);
         const auto &move = JaSaberMoves::fast().move(driver.machine().move());
         scales[move.kind].insert(step.speedScale);
         if (move.kind == JaMoveKind::Ready) {
@@ -440,6 +459,7 @@ TEST(JaSaberDriver, should_move_backwards_at_three_quarters_of_its_speed_during_
     // then: 3/4 speed in the attack itself, full speed in its start, its
     // return and the stance
     EXPECT_EQ(std::set<float>({JaSaberDriver::kBackwardsAttackSpeed}), scales[JaMoveKind::Attack]);
+    EXPECT_EQ(std::set<float>({1.0f}), scales[JaMoveKind::Start]);
     EXPECT_EQ(std::set<float>({1.0f}), scales[JaMoveKind::Return]);
     EXPECT_EQ(std::set<float>({1.0f}), scales[JaMoveKind::Ready]);
 
@@ -455,6 +475,204 @@ TEST(JaSaberDriver, should_move_backwards_at_three_quarters_of_its_speed_during_
     }
     EXPECT_EQ(JaMoveKind::Attack, JaSaberMoves::fast().move(forward.machine().move()).kind);
     EXPECT_FLOAT_EQ(1.0f, step.speedScale);
+}
+
+TEST(JaSaberDriver, should_run_backwards_at_three_quarters_of_its_speed_and_slower_again_in_an_attack) {
+    // given
+    SaberBody body;
+    JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+    driver.start(body.rest());
+
+    // when, then: running backwards, straight or to a side, at 3/4 of the
+    // speed; running forward or sideways, and walking backwards, at full speed
+    EXPECT_FLOAT_EQ(1.0f, driver.step(kTick, holding(false, 1, 0), false, 5.0f).speedScale);
+    EXPECT_FLOAT_EQ(1.0f, driver.step(kTick, holding(false, 0, 1), false, 5.0f).speedScale);
+    EXPECT_FLOAT_EQ(JaSaberDriver::kBackwardsRunSpeed, driver.step(kTick, holding(false, -1, 0), false, 5.0f).speedScale);
+    EXPECT_FLOAT_EQ(JaSaberDriver::kBackwardsRunSpeed, driver.step(kTick, holding(false, -1, 1), false, 5.0f).speedScale);
+    EXPECT_FLOAT_EQ(1.0f, driver.step(kTick, holding(false, -1, 0), true, 1.5f).speedScale);
+
+    // when: attacking on the way back, running, then letting go of the
+    // button, until the stance
+    std::map<JaMoveKind, std::set<float>> scales;
+    for (int tick = 0; tick < 120; ++tick) {
+        auto step = driver.step(kTick, holding(tick == 0, -1, 0), false, 5.0f);
+        const auto &move = JaSaberMoves::fast().move(driver.machine().move());
+        scales[move.kind].insert(step.speedScale);
+        if (move.kind == JaMoveKind::Ready) {
+            break;
+        }
+    }
+
+    // then: 3/4 of 3/4 in the attack itself, 3/4 in the rest
+    EXPECT_EQ(std::set<float>({0.5625f}), scales[JaMoveKind::Attack]);
+    EXPECT_EQ(std::set<float>({0.75f}), scales[JaMoveKind::Start]);
+    EXPECT_EQ(std::set<float>({0.75f}), scales[JaMoveKind::Return]);
+    EXPECT_EQ(std::set<float>({0.75f}), scales[JaMoveKind::Ready]);
+}
+
+TEST(JaSaberDriver, should_spin_on_the_whole_body_on_the_move_at_half_speed_facing_the_view) {
+    // given: running forward and to the right, the legs turned toward the
+    // movement
+    SaberBody body;
+    const auto &moves = JaSaberMoves::fast();
+    JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+    driver.start(body.rest());
+    for (int tick = 0; tick < 30; ++tick) {
+        driver.step(kTick, holding(false, 1, 1), false, 5.0f);
+    }
+    ASSERT_NEAR(glm::radians(-45.0f), driver.legsYaw(), 1e-4f);
+
+    // when: holding the attack button too, round twice
+    int spin = moves.find("LS_T1_BR_TL");
+    ASSERT_NE(JaSaberMoves::kNone, spin);
+    const std::string &spinClip = moves.move(spin).clip;
+    std::vector<std::string> played;
+    std::vector<std::string> wholeBody; /**< the moves the legs took up as they started */
+    std::set<float> spinScales;
+    std::set<float> runScales;
+    int spinTicks = 0;
+    float spinYaw = 0.0f;
+    for (int tick = 0; tick < 300 && played.size() < 6; ++tick) {
+        auto step = driver.step(kTick, holding(true, 1, 1), false, 5.0f);
+        const auto &legs = driver.animator().clip(JaBodyAnimator::kLegs);
+        for (int id : step.started) {
+            played.push_back(moves.move(id).name);
+            if (legs == moves.move(id).clip) {
+                wholeBody.push_back(moves.move(id).name);
+            }
+        }
+        if (legs == spinClip) {
+            ++spinTicks;
+            spinScales.insert(step.speedScale);
+            spinYaw = std::max(spinYaw, std::abs(driver.legsYaw()));
+            // nor is the torso turned back from the legs
+            expectSamePose(driver.animator().pose(), driver.pose());
+        } else {
+            EXPECT_EQ(std::string("BOTH_RUN2"), legs);
+            runScales.insert(step.speedScale);
+        }
+    }
+
+    // then: the attack goes round through the spin, which plays on the
+    // whole body and holds the legs for its hold, at half speed, the body
+    // facing the view; the rest plays on the torso, the legs running at full
+    // speed
+    std::vector<std::string> expected {"LS_S_TL2BR", "LS_A_TL2BR", "LS_T1_BR_TL", "LS_A_TL2BR", "LS_T1_BR_TL", "LS_A_TL2BR"};
+    EXPECT_EQ(expected, played);
+    EXPECT_EQ(std::vector<std::string>({"LS_T1_BR_TL", "LS_T1_BR_TL"}), wholeBody);
+    EXPECT_NEAR(2.0f * driver.machine().timing(spin).holdMs / 1000.0f, spinTicks * kTick, 2.0f * kTick);
+    EXPECT_EQ(std::set<float>({JaSaberDriver::kSpinSpeed}), spinScales);
+    EXPECT_EQ(std::set<float>({1.0f}), runScales);
+    EXPECT_FLOAT_EQ(0.0f, spinYaw);
+    // and after it the legs turn from the view toward the movement again
+    EXPECT_NEAR(glm::radians(-5.0f), driver.legsYaw(), 1e-4f);
+}
+
+TEST(JaSaberDriver, should_free_the_legs_from_a_spin_on_the_tick_the_torso_moves_on) {
+    // given: a spin that holds for 400 ms, 24 ticks at 60 Hz, a length the
+    // timers count to within floating-point rounding
+    auto clips = saberClips();
+    clips["BOTH_T1_BR_TL"] = {0, 3, -1, 3.34f};
+    SaberBody body(clips);
+    const auto &moves = JaSaberMoves::fast();
+    JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+    driver.start(body.rest());
+    ASSERT_EQ(400, driver.machine().timing(moves.find("LS_T1_BR_TL")).holdMs);
+    driver.step(kTick, holding(false, 1, 1), false, 5.0f);
+
+    // when: holding forward, right and the button on the run, round once
+    std::vector<std::string> played;
+    int spinTicks = 0;
+    for (int tick = 0; tick < 300 && played.size() < 4; ++tick) {
+        auto step = driver.step(kTick, holding(true, 1, 1), false, 5.0f);
+        for (int id : step.started) {
+            played.push_back(moves.move(id).name);
+        }
+        bool legsSpin = driver.animator().clip(JaBodyAnimator::kLegs) == "BOTH_T1_BR_TL";
+        bool torsoSpin = driver.animator().clip(JaBodyAnimator::kTorso) == "BOTH_T1_BR_TL";
+
+        // then: the legs leave the spin on the tick the torso does
+        EXPECT_EQ(torsoSpin, legsSpin) << "tick " << tick;
+        spinTicks += legsSpin ? 1 : 0;
+    }
+    std::vector<std::string> expected {"LS_S_TL2BR", "LS_A_TL2BR", "LS_T1_BR_TL", "LS_A_TL2BR"};
+    EXPECT_EQ(expected, played);
+    EXPECT_GE(spinTicks, 24);
+}
+
+TEST(JaSaberDriver, should_play_a_transition_that_isnt_a_spin_on_the_torso_on_the_move) {
+    // given: running forward
+    SaberBody body;
+    const auto &moves = JaSaberMoves::fast();
+    JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+    driver.start(body.rest());
+    driver.step(kTick, holding(false, 1, 0), false, 5.0f);
+
+    // when: holding the attack button too, until the attack goes round
+    std::vector<std::string> played;
+    std::set<float> scales;
+    bool legsRan = true;
+    for (int tick = 0; tick < 300 && played.size() < 4; ++tick) {
+        auto step = driver.step(kTick, holding(true, 1, 0), false, 5.0f);
+        for (int id : step.started) {
+            played.push_back(moves.move(id).name);
+        }
+        scales.insert(step.speedScale);
+        legsRan &= driver.animator().clip(JaBodyAnimator::kLegs) == "BOTH_RUN2";
+    }
+
+    // then: it goes round from the bottom by the bottom right's transition
+    // to the top, which isn't a spin: on the torso, the legs running on at
+    // full speed
+    std::vector<std::string> expected {"LS_S_T2B", "LS_A_T2B", "LS_T1_BR_T_", "LS_A_T2B"};
+    EXPECT_EQ(expected, played);
+    EXPECT_FALSE(moves.move(moves.find("LS_T1_BR_T_")).spin);
+    EXPECT_TRUE(legsRan);
+    EXPECT_EQ(std::set<float>({1.0f}), scales);
+}
+
+TEST(JaSaberDriver, should_spin_at_half_speed_and_run_backwards_at_three_quarters_of_that) {
+    // Holding back, right and the attack button goes round from the bottom
+    // left to the top right through a spin.
+    const auto &moves = JaSaberMoves::fast();
+    SaberBody body;
+    auto scales = [&](bool walk) {
+        JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+        driver.start(body.rest());
+        std::map<std::string, std::set<float>> byPart;
+        std::vector<std::string> played;
+        for (int tick = 0; tick < 300 && played.size() < 4; ++tick) {
+            auto step = driver.step(kTick, holding(true, -1, 1), walk, walk ? 1.5f : 5.0f);
+            for (int id : step.started) {
+                played.push_back(moves.move(id).name);
+            }
+            JaMoveKind kind = moves.move(driver.machine().move()).kind;
+            std::string part;
+            if (driver.animator().clip(JaBodyAnimator::kLegs) == "BOTH_T1_TR_BL") {
+                part = "spin";
+            } else {
+                part = kind == JaMoveKind::Attack ? "attack" : (kind == JaMoveKind::Start ? "start" : "other");
+            }
+            byPart[part].insert(step.speedScale);
+        }
+        std::vector<std::string> expected {"LS_S_BL2TR", "LS_A_BL2TR", "LS_T1_TR_BL", "LS_A_BL2TR"};
+        EXPECT_EQ(expected, played) << (walk ? "walking" : "running");
+        return byPart;
+    };
+
+    // running: 3/4 backwards; of that, 3/4 in the attack and half in the spin
+    auto running = scales(false);
+    EXPECT_EQ(std::set<float>({0.75f}), running["start"]);
+    EXPECT_EQ(std::set<float>({0.5625f}), running["attack"]);
+    EXPECT_EQ(std::set<float>({0.375f}), running["spin"]);
+    EXPECT_TRUE(running["other"].empty());
+
+    // walking: full speed backwards, 3/4 in the attack, half in the spin
+    auto walking = scales(true);
+    EXPECT_EQ(std::set<float>({1.0f}), walking["start"]);
+    EXPECT_EQ(std::set<float>({0.75f}), walking["attack"]);
+    EXPECT_EQ(std::set<float>({0.5f}), walking["spin"]);
+    EXPECT_TRUE(walking["other"].empty());
 }
 
 TEST(JaSaberDriver, should_turn_the_legs_toward_a_sidestep_and_keep_the_torso_on_the_view) {

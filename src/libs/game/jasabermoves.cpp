@@ -30,6 +30,11 @@ namespace {
 const std::array<const char *, 8> kQuadCodes {"BR", "_R", "TR", "T_", "TL", "_L", "BL", "B_"};
 const std::array<const char *, 8> kQuadNames {"BR", "R", "TR", "T", "TL", "L", "BL", "B"};
 
+// The fast style's spins, from one quadrant to another, as clip names spell
+// them (PM_SpinningSaberAnim, bg_pmove.cpp:7022-7038).
+const std::array<const char *, 12> kSpins {
+    "BR_BL", "_R__L", "_R_BL", "TR_BL", "BR_TL", "BR__L", "TL_BR", "_L_BR", "_L__R", "BL_BR", "BL__R", "BL_TR"};
+
 struct AttackSpec {
     JaQuad start;
     JaQuad end;
@@ -145,6 +150,7 @@ JaSaberMoves::JaSaberMoves() {
             move.hold = JaMoveHold::Active;
             move.blendMs = kMoveBlendMs;
             move.timeScale = kFastTransitionScale;
+            move.spin = std::find(kSpins.begin(), kSpins.end(), name) != kSpins.end();
             // A transition goes on to the attack that starts where it ends.
             move.chainAttack = attackFrom(move.endQuad);
         }

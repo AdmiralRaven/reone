@@ -536,7 +536,8 @@ bool JaSaber::update(float dt) {
         glm::vec2 direction(glm::normalize(static_cast<float>(in.forward) * forward + static_cast<float>(in.right) * right));
         creature->clearAllActions();
         creature->clearPath();
-        // Slower backwards in an attack: the step's share of the speed.
+        // The step's share of the speed: less in a spin, backwards in an
+        // attack, and running backwards.
         area->moveCreature(creature, direction, !walk, dt, speed * step.speedScale * dt);
     }
     creature->setFacing(view + _driver->legsYaw());
