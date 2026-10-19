@@ -243,7 +243,7 @@ JaSaberDriver::JaSaberDriver(
 void JaSaberDriver::start(const JaRetargeter::Pose &pose) {
     _machine.reset();
     _legsYaw = 0.0f;
-    _legsHold = 0.0f;
+    _legsHoldMs = 0.0f;
     _legsSpin = false;
     _animator.hold(pose);
     const auto &moves = _machine.moves();
@@ -255,7 +255,9 @@ void JaSaberDriver::start(const JaRetargeter::Pose &pose) {
 JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, bool walk, float speed) {
     Step result;
     _animator.advance(dt);
-    _legsHold = std::max(0.0f, _legsHold - std::max(0.0f, dt));
+    // In milliseconds, as the state machine counts, so that a spin lets go of
+    // the legs on the tick its hold lets go of the torso.
+    _legsHoldMs = std::max(0.0f, _legsHoldMs - std::max(0.0f, dt * 1000.0f));
     result.started = _machine.tick(dt, input);
     const auto &moves = _machine.moves();
     result.moving = input.forward != 0 || input.right != 0;
@@ -265,7 +267,7 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
         if (!result.moving || move.spin) {
             // Standing, and for a spin on the move too, the whole body.
             _animator.play(JaBodyAnimator::kBody, move.clip, timing.rate, timing.blendMs / 1000.0f);
-            _legsHold = timing.holdMs / 1000.0f;
+            _legsHoldMs = static_cast<float>(timing.holdMs);
             _legsSpin = move.spin;
         } else if (id != moves.ready()) {
             // The legs go on walking or running; the ready stance takes up
@@ -279,10 +281,10 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
     const auto &locomotion = locomotionClips();
     // Held legs take no new clip, but moving takes them from any move but a
     // spin, its hold notwithstanding.
-    bool legsFree = _legsHold <= 0.0f || (result.moving && !_legsSpin);
+    bool legsFree = _legsHoldMs <= 0.0f || (result.moving && !_legsSpin);
     if (result.moving && legsFree) {
         // The legs walk or run from this tick on, below.
-        _legsHold = 0.0f;
+        _legsHoldMs = 0.0f;
         _legsSpin = false;
     }
     if (result.moving) {

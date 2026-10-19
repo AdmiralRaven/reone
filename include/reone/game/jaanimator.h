@@ -219,7 +219,7 @@ private:
     JaSaberStateMachine _machine;
     JaBodyAnimator _animator;
     float _legsYaw {0.0f};
-    float _legsHold {0.0f}; /**< how much longer a move on the whole body holds the legs, in seconds */
+    float _legsHoldMs {0.0f}; /**< how much longer a move on the whole body holds the legs, counted as JaSaberStateMachine counts its hold */
     bool _legsSpin {false}; /**< whether the legs play a spin */
 };
 

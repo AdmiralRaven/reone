@@ -568,6 +568,38 @@ TEST(JaSaberDriver, should_spin_on_the_whole_body_on_the_move_at_half_speed_faci
     EXPECT_NEAR(glm::radians(-5.0f), driver.legsYaw(), 1e-4f);
 }
 
+TEST(JaSaberDriver, should_free_the_legs_from_a_spin_on_the_tick_the_torso_moves_on) {
+    // given: a spin that holds for 400 ms, 24 ticks at 60 Hz, a length the
+    // timers count to within floating-point rounding
+    auto clips = saberClips();
+    clips["BOTH_T1_BR_TL"] = {0, 3, -1, 3.34f};
+    SaberBody body(clips);
+    const auto &moves = JaSaberMoves::fast();
+    JaSaberDriver driver(*body.sequencer, *body.retargeter, body.clips);
+    driver.start(body.rest());
+    ASSERT_EQ(400, driver.machine().timing(moves.find("LS_T1_BR_TL")).holdMs);
+    driver.step(kTick, holding(false, 1, 1), false, 5.0f);
+
+    // when: holding forward, right and the button on the run, round once
+    std::vector<std::string> played;
+    int spinTicks = 0;
+    for (int tick = 0; tick < 300 && played.size() < 4; ++tick) {
+        auto step = driver.step(kTick, holding(true, 1, 1), false, 5.0f);
+        for (int id : step.started) {
+            played.push_back(moves.move(id).name);
+        }
+        bool legsSpin = driver.animator().clip(JaBodyAnimator::kLegs) == "BOTH_T1_BR_TL";
+        bool torsoSpin = driver.animator().clip(JaBodyAnimator::kTorso) == "BOTH_T1_BR_TL";
+
+        // then: the legs leave the spin on the tick the torso does
+        EXPECT_EQ(torsoSpin, legsSpin) << "tick " << tick;
+        spinTicks += legsSpin ? 1 : 0;
+    }
+    std::vector<std::string> expected {"LS_S_TL2BR", "LS_A_TL2BR", "LS_T1_BR_TL", "LS_A_TL2BR"};
+    EXPECT_EQ(expected, played);
+    EXPECT_GE(spinTicks, 24);
+}
+
 TEST(JaSaberDriver, should_play_a_transition_that_isnt_a_spin_on_the_torso_on_the_move) {
     // given: running forward
     SaberBody body;
