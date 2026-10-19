@@ -484,6 +484,8 @@ TEST(JaSaberDamage, should_hit_with_the_weapons_damage_and_no_attack_roll) {
         .Times(AnyNumber())
         .WillRepeatedly(Return(weaponTable()));
     auto attacker = game.newCreature();
+    // no strength bonus or malus: reone's default score, 8, takes 1 off
+    attacker->attributes().setAbilityScore(Ability::Strength, 10);
     auto saber = weapon(game, kLightsaber);
     ASSERT_TRUE(attacker->equip(InventorySlots::rightWeapon, saber));
     auto target = game.newCreature();
@@ -537,40 +539,6 @@ TEST(JaSaberDamage, should_kill_with_the_targets_hit_points_on_top) {
 }
 
 // Blades and bodies in a scene
-
-namespace {
-
-// A lightsaber model with one blade, a mesh 2 cm square that runs along +Z
-// for 1 m, from 5 cm past the hilt's origin; with \p planes meshes on it, as
-// KOTOR's single saber has two crossed planes.
-std::shared_ptr<Model> syntheticSaber(int planes = 1) {
-    const glm::quat none(1.0f, 0.0f, 0.0f, 0.0f);
-    auto root = std::make_shared<ModelNode>(0, "w_test_saber", glm::vec3(0.0f), none, true);
-    for (int plane = 0; plane < planes; ++plane) {
-        auto blade = std::make_shared<ModelNode>(1 + plane, "blade" + std::to_string(plane), glm::vec3(0.0f, 0.0f, 0.05f), none, true, root.get());
-        std::vector<Mesh::Vertex> vertices;
-        for (float x : {-0.01f, 0.01f}) {
-            for (float y : {-0.01f, 0.01f}) {
-                for (float z : {0.0f, 1.0f}) {
-                    Mesh::Vertex vertex;
-                    vertex.position = glm::vec3(x, y, z);
-                    vertices.push_back(vertex);
-                }
-            }
-        }
-        Mesh::VertexLayout layout;
-        layout.stride = 3 * sizeof(float);
-        layout.offPosition = 0;
-        auto mesh = std::make_shared<ModelNode::TriangleMesh>();
-        mesh->mesh = std::make_shared<Mesh>(std::move(vertices), layout, std::vector<Mesh::Face>());
-        mesh->saber = true;
-        blade->setMesh(mesh);
-        root->addChild(blade);
-    }
-    return std::make_shared<Model>("w_test_saber", 0, root, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
-}
-
-} // namespace
 
 TEST(JaSaberBlades, should_find_a_saber_models_blade_along_its_z) {
     auto blades = jaSaberBlades(*syntheticSaber());
@@ -854,8 +822,9 @@ TEST(JaSaberContactsOnGameFiles, should_hit_a_body_ahead_with_attacks_and_spins_
         bind.orientations.push_back(node.restOrientation);
     }
     bind.rootPosition = retargeter.nodes()[retargeter.rootNodeIndex()].restPosition;
-    // Runs a scenario against \p targets; returns each hit as "move at time, target, part".
-    auto run = [&](const Scenario &scenario, const std::vector<JaContactTarget> &targets, float &reach) {
+    // Runs a scenario against \p targets, \p rate ticks a second; returns
+    // each hit as "move at time, target, part".
+    auto run = [&](const Scenario &scenario, const std::vector<JaContactTarget> &targets, float &reach, float rate = 60.0f) {
         std::vector<std::pair<uint32_t, std::string>> hits;
         JaSaberDriver driver(sequencer, retargeter, clips);
         driver.start(bind);
@@ -863,10 +832,10 @@ TEST(JaSaberContactsOnGameFiles, should_hit_a_body_ahead_with_attacks_and_spins_
         contacts.setBladeRadius(bladeRadius);
         int serial = 0;
         reach = 0.0f;
-        int ticks = static_cast<int>(std::lround(scenario.seconds * 60.0f));
+        int ticks = static_cast<int>(std::lround(scenario.seconds * rate));
         for (int tick = 0; tick <= ticks; ++tick) {
-            float t = tick / 60.0f;
-            auto step = driver.step(tick == 0 ? 0.0f : 1.0f / 60.0f, scenario.input(t), false, 3.96f);
+            float t = tick / rate;
+            auto step = driver.step(tick == 0 ? 0.0f : 1.0f / rate, scenario.input(t), false, 3.96f);
             serial += static_cast<int>(step.started.size());
             glm::mat4 facing(glm::rotate(driver.legsYaw(), glm::vec3(0.0f, 0.0f, 1.0f)));
             glm::mat4 hand(facing * retargeter.transforms(driver.pose())[weapon]);
@@ -909,6 +878,22 @@ TEST(JaSaberContactsOnGameFiles, should_hit_a_body_ahead_with_attacks_and_spins_
             EXPECT_EQ(2u, hitsNear[scenario.name]);
         } else {
             EXPECT_EQ(1u, hitsNear[scenario.name]) << scenario.name;
+        }
+    }
+
+    // The same swings 1.2 m ahead at other tick rates: the sweep covers the
+    // blade's whole path between two ticks, so they hit as at 60 Hz.
+    for (float rate : {30.0f, 144.0f}) {
+        for (auto &scenario : scenarios) {
+            float reach;
+            auto hits = run(scenario, {{7, targetAt(1.2f)}}, reach, rate);
+            std::vector<std::string> lines;
+            for (auto &hit : hits) {
+                lines.push_back(hit.second);
+            }
+            std::cout << scenario.name << " at " << rate << " Hz, target 1.2 m ahead: " << hits.size() << " hits"
+                      << (hits.empty() ? "" : ": " + boost::join(lines, "; ")) << std::endl;
+            EXPECT_EQ(hitsNear[scenario.name], hits.size()) << scenario.name << " at " << rate << " Hz";
         }
     }
 

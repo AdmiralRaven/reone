@@ -23,6 +23,7 @@
 #include "reone/graphics/animation.h"
 #include "reone/graphics/format/glareader.h"
 #include "reone/graphics/ghoulanimation.h"
+#include "reone/graphics/mesh.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
 #include "reone/system/stream/memoryinput.h"
@@ -212,6 +213,54 @@ inline std::shared_ptr<Model> syntheticKotorBody(bool withSkin, const std::strin
         globals[spec.name] = global;
     }
     return std::make_shared<Model>("synthetic_body", 0, root, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+}
+
+// A mesh that is a box from \p min to \p max: only its corners, as the
+// blade and body tests need only its bounds.
+inline std::shared_ptr<ModelNode::TriangleMesh> boxMesh(const glm::vec3 &min, const glm::vec3 &max) {
+    std::vector<Mesh::Vertex> vertices;
+    for (float x : {min.x, max.x}) {
+        for (float y : {min.y, max.y}) {
+            for (float z : {min.z, max.z}) {
+                Mesh::Vertex vertex;
+                vertex.position = glm::vec3(x, y, z);
+                vertices.push_back(vertex);
+            }
+        }
+    }
+    Mesh::VertexLayout layout;
+    layout.stride = 3 * sizeof(float);
+    layout.offPosition = 0;
+    auto mesh = std::make_shared<ModelNode::TriangleMesh>();
+    mesh->mesh = std::make_shared<Mesh>(std::move(vertices), layout, std::vector<Mesh::Face>());
+    return mesh;
+}
+
+// A lightsaber model with one blade, a mesh 2 cm square that runs along +Z
+// for 1 m, from 5 cm past the hilt's origin; with \p planes meshes on it, as
+// KOTOR's single saber has two crossed planes.
+inline std::shared_ptr<Model> syntheticSaber(int planes = 1) {
+    const glm::quat none(1.0f, 0.0f, 0.0f, 0.0f);
+    auto root = std::make_shared<ModelNode>(0, "w_test_saber", glm::vec3(0.0f), none, true);
+    for (int plane = 0; plane < planes; ++plane) {
+        auto blade = std::make_shared<ModelNode>(1 + plane, "blade" + std::to_string(plane), glm::vec3(0.0f, 0.0f, 0.05f), none, true, root.get());
+        auto mesh = boxMesh(glm::vec3(-0.01f, -0.01f, 0.0f), glm::vec3(0.01f, 0.01f, 1.0f));
+        mesh->saber = true;
+        blade->setMesh(mesh);
+        root->addChild(blade);
+    }
+    return std::make_shared<Model>("w_test_saber", MdlClassification::lightsaber, root, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+}
+
+// A creature's model that is one box, \p width square and \p height tall,
+// standing on its origin: a body with no humanoid skeleton.
+inline std::shared_ptr<Model> syntheticBoxBody(float width, float height) {
+    const glm::quat none(1.0f, 0.0f, 0.0f, 0.0f);
+    auto root = std::make_shared<ModelNode>(0, "box_body", glm::vec3(0.0f), none, true);
+    auto box = std::make_shared<ModelNode>(1, "box", glm::vec3(0.0f), none, true, root.get());
+    box->setMesh(boxMesh(glm::vec3(-0.5f * width, -0.5f * width, 0.0f), glm::vec3(0.5f * width, 0.5f * width, height)));
+    root->addChild(box);
+    return std::make_shared<Model>("box_body", 0, root, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
 }
 
 inline std::map<std::string, GhoulAnimationClip> syntheticClips() {

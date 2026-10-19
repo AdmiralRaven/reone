@@ -101,8 +101,10 @@ constexpr float kJaBladeRadius = 0.05f;
  * The first contact of a blade moving from \p from to \p to with any of
  * \p parts, or none. On the way the base moves straight, the blade turns at
  * an even rate and its length changes evenly, as a swing between two ticks
- * would; the blade is tested at both ends and at steps no part, with the
- * blade's thickness, can pass between.
+ * would. The blade is tested at both ends and at steps in which no point of
+ * it moves farther than the thinnest part's reach, the part's radius and the
+ * blade's: so no part can be cut through between two steps, and only a graze
+ * in the outer 13% of a part's reach can fall between them.
  */
 std::optional<JaBladeContact> jaSweepBlade(
     const JaBlade &from,

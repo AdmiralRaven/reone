@@ -163,8 +163,9 @@ std::optional<JaBladeContact> jaSweepBlade(
     BladeState end(bladeState(to));
     Turn turn(turnBetween(start.direction, end.direction));
 
-    // No point of the blade moves farther in a step than the thinnest part,
-    // with the blade's thickness, is wide, so none can pass between steps.
+    // No point of the blade moves farther in a step than the thinnest part's
+    // reach: a path through a part's reach then has a step inside it unless
+    // it passes farther out than sqrt(3)/2 of the reach, a graze.
     float reach = std::numeric_limits<float>::max();
     for (auto &part : parts) {
         reach = std::min(reach, part.radius + bladeRadius);

@@ -1259,6 +1259,66 @@ TEST(Creature, should_activate_and_deactivate_lightsabers_in_both_hands_with_com
     EXPECT_EQ(leftSaberNode->activeAnimationName(), "powerdown");
 }
 
+TEST(Creature, should_keep_lightsabers_on_through_the_end_of_combat_until_let_go) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+
+    auto bodyRoot = std::make_shared<graphics::ModelNode>(
+        0, "root_node", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
+    bodyRoot->addChild(std::make_shared<graphics::ModelNode>(
+        1, "rhand", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, bodyRoot.get()));
+    graphics::Model body("body", graphics::MdlClassification::character, bodyRoot, {}, "", 1.0f);
+    auto saber = makeModel(
+        "saber",
+        {makeAnimation("off"), makeAnimation("powerup"), makeAnimation("powered"), makeAnimation("powerdown")},
+        graphics::MdlClassification::lightsaber);
+
+    graphics::GraphicsOptions graphicsOptions;
+    scene::SceneGraph graph(
+        "test",
+        engine.sceneModule().renderPipelineFactory(),
+        graphicsOptions,
+        engine.services().graphics,
+        engine.services().audio,
+        engine.services().resource);
+    auto bodyNode = graph.newModel(body, scene::ModelUsage::Creature);
+    auto saberNode = graph.newModel(*saber, scene::ModelUsage::Equipment);
+    bodyNode->attach("rhand", *saberNode);
+    saberNode->playAnimation("off");
+    TestCreature creature(1, "test", game, engine.services());
+    creature.setSceneNode(bodyNode);
+
+    // when: kept on, as saber mode keeps the saber, through a fight's end and
+    // a combat ended at once
+    creature.setLightsabersOn(true);
+    EXPECT_TRUE(creature.lightsabersKeptOn());
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerup");
+    creature.activateCombat();
+    creature.deactivateCombat(8.0f);
+    creature.update(8.1f);
+    EXPECT_FALSE(creature.isInCombat());
+    creature.activateCombat();
+    creature.deactivateCombat(0.0f);
+
+    // then: it stays lit
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerup");
+
+    // when: let go in combat, it stays lit until the combat ends
+    creature.activateCombat();
+    creature.setLightsabersOn(false);
+    EXPECT_FALSE(creature.lightsabersKeptOn());
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerup");
+    creature.deactivateCombat(0.0f);
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerdown");
+
+    // and let go out of combat, it powers down at once
+    creature.setLightsabersOn(true);
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerup");
+    creature.setLightsabersOn(false);
+    EXPECT_EQ(saberNode->activeAnimationName(), "powerdown");
+}
+
 TEST(Conversation, should_advance_script_only_auto_routing_entry_without_presenting_it) {
     TestEngine &engine = testEngine();
     StubConsole console;

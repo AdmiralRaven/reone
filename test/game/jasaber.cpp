@@ -22,6 +22,7 @@
 #include "../fixtures/jabody.h"
 
 #include "reone/game/action.h"
+#include "reone/game/action/attackobject.h"
 #include "reone/game/camerastyle.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/dialog.h"
@@ -163,8 +164,7 @@ protected:
         model = std::make_shared<ModelSceneNode>(*body, ModelUsage::Creature, *scene,
                                                  engine.services().graphics, engine.services().audio, engine.services().resource);
         model->init();
-        auto hilt = std::make_shared<ModelNode>(0, "test_saber", glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true, nullptr);
-        saberModel = std::make_shared<Model>("test_saber", MdlClassification::lightsaber, hilt, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+        saberModel = syntheticSaber();
         saber = std::make_shared<ModelSceneNode>(*saberModel, ModelUsage::Equipment, *scene,
                                                  engine.services().graphics, engine.services().audio, engine.services().resource);
         saber->init();
@@ -586,4 +586,153 @@ TEST_F(JaSaberMode, should_swing_top_to_bottom_from_ready_when_looking_more_than
         EXPECT_EQ(c.start, game.jaSaber().moveName()) << c.degrees;
         game.jaSaber().setScriptedInput(std::nullopt);
     }
+}
+
+TEST_F(JaSaberMode, should_keep_the_saber_lit_until_saber_mode_ends) {
+    // given: saber mode keeps the leader's saber on
+    EXPECT_TRUE(leader->lightsabersKeptOn());
+
+    // when
+    game.jaSaber().leave();
+
+    // then: KOTOR's combat decides again
+    EXPECT_FALSE(leader->lightsabersKeptOn());
+}
+
+TEST_F(JaSaberMode, should_cut_as_thick_as_jas_traces_at_the_bodys_scale) {
+    float scale = game.jaSaber().library().body(*body).retargeter->scale();
+    EXPECT_FLOAT_EQ(kJaBladeTraceUnits * scale, game.jaSaber().bladeRadius());
+    EXPECT_NE(kJaBladeRadius, game.jaSaber().bladeRadius());
+}
+
+TEST_F(JaSaberMode, should_drop_an_attack_of_kotors_own_so_that_only_the_blade_hits) {
+    // given: an attack of KOTOR's own, queued for the leader as a combat round
+    // queues one when its target falls
+    auto other = game.newCreature();
+    game.module()->area()->add(other);
+    leader->addAction(game.newAction<AttackObjectAction>(other));
+    ASSERT_FALSE(leader->actions().empty());
+
+    // when
+    play(1.0f / 60.0f);
+
+    // then
+    EXPECT_TRUE(leader->actions().empty());
+}
+
+namespace {
+
+// Saber mode with creatures standing round for its blade to hit, which are
+// hostile to the party leader as the test says.
+class JaSaberHits : public JaSaberMode {
+protected:
+    void SetUp() override {
+        JaSaberMode::SetUp();
+        EXPECT_CALL(reputes(), getIsEnemy(An<const Creature &>(), An<const Creature &>()))
+            .Times(AnyNumber())
+            .WillRepeatedly(Invoke([this](const Creature &source, const Creature &target) {
+                return hostile.count(source.id()) > 0 || hostile.count(target.id()) > 0;
+            }));
+    }
+
+    void TearDown() override {
+        Mock::VerifyAndClearExpectations(&reputes());
+        JaSaberMode::TearDown();
+    }
+
+    MockReputes &reputes() {
+        return static_cast<MockReputes &>(engine.services().game.reputes);
+    }
+
+    // A creature with 20 hit points at \p at, \p width across: a box body,
+    // one upright capsule half as round, 3 m tall.
+    std::shared_ptr<Creature> addCreature(const std::string &tag, const glm::vec2 &at, float width, bool isHostile) {
+        auto creature = game.newCreature();
+        creature->setTag(tag);
+        creature->setMaxHitPoints(20);
+        creature->setCurrentHitPoints(20);
+        bodies.push_back(syntheticBoxBody(width, 3.0f));
+        auto node = std::make_shared<ModelSceneNode>(*bodies.back(), ModelUsage::Creature, *scene,
+                                                     engine.services().graphics, engine.services().audio, engine.services().resource);
+        node->init();
+        TestGameModule::setSceneNode(*creature, node);
+        creature->setPosition(glm::vec3(at, 0.0f));
+        game.module()->area()->add(creature);
+        if (isHostile) {
+            hostile.insert(creature->id());
+        }
+        nodes.push_back(node);
+        return creature;
+    }
+
+    std::set<uint32_t> hostile;
+    std::vector<std::shared_ptr<Model>> bodies;
+    std::vector<std::shared_ptr<ModelSceneNode>> nodes;
+};
+
+} // namespace
+
+TEST_F(JaSaberHits, should_hit_a_hostile_creature_the_blade_reaches_and_pass_through_a_friendly_one) {
+    // given: the blade lit in the hand
+    play(1.0f / 60.0f);
+    auto blades = game.jaSaber().blades();
+    ASSERT_EQ(1u, blades.size());
+    // two bodies 5 m across round the leader, so the blade is inside both
+    // wherever the swing takes it, one hostile and one not; and a hostile
+    // one out of reach
+    auto enemy = addCreature("enemy", glm::vec2(0.0f, 0.3f), 5.0f, true);
+    auto friendly = addCreature("friendly", glm::vec2(0.0f, 0.3f), 5.0f, false);
+    auto far = addCreature("far", glm::vec2(0.0f, 6.0f), 1.0f, true);
+
+    // when: the leader swings, a start, then the attack
+    JaSaberInput attack;
+    attack.attack = true;
+    game.jaSaber().setScriptedInput(attack);
+    play(1.5f);
+    game.jaSaber().setScriptedInput(std::nullopt);
+
+    // then: the blade hit the enemy once, and as it can't block, killed it
+    EXPECT_EQ(1, game.jaSaber().hitCount());
+    EXPECT_TRUE(enemy->isDead());
+    // and passed through the creature on the leader's side
+    EXPECT_FALSE(friendly->isDead());
+    EXPECT_EQ(20, friendly->currentHitPoints());
+    // and didn't reach the one 6 m away
+    EXPECT_EQ(20, far->currentHitPoints());
+}
+
+TEST_F(JaSaberHits, should_hit_nothing_while_the_leader_stands_ready) {
+    // given: a hostile body round the leader
+    auto enemy = addCreature("enemy", glm::vec2(0.0f, 0.3f), 5.0f, true);
+
+    // when: the leader stands in the ready stance, no button held
+    play(1.0f);
+
+    // then
+    EXPECT_EQ(0, game.jaSaber().hitCount());
+    EXPECT_EQ(20, enemy->currentHitPoints());
+}
+
+TEST_F(JaSaberHits, should_turn_to_the_nearest_enemy_and_swing_until_none_is_left_when_engaging) {
+    // given: an enemy 1 m to the right, within reach, and a friendly creature
+    // nearer, to the left
+    auto enemy = addCreature("enemy", glm::vec2(1.0f, 0.0f), 5.0f, true);
+    auto friendly = addCreature("friendly", glm::vec2(-0.5f, 0.0f), 1.0f, false);
+
+    // when
+    game.jaSaber().setEngage(true);
+    play(1.0f / 60.0f);
+
+    // then: the camera, and so the character, faces the enemy, not the
+    // nearer friendly creature: facing f looks along (-sin f, cos f)
+    EXPECT_NEAR(1.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
+
+    // and when it has had time to swing
+    play(2.0f);
+
+    // then: it killed the enemy, once, and spared the friendly creature
+    EXPECT_TRUE(enemy->isDead());
+    EXPECT_EQ(1, game.jaSaber().hitCount());
+    EXPECT_EQ(20, friendly->currentHitPoints());
+    EXPECT_TRUE(game.jaSaber().engaging());
 }

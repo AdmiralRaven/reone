@@ -333,8 +333,15 @@ public:
     void activateCombat();
     void deactivateCombat(float delay);
 
-    /** Turns the lightsabers in the creature's hands on or off, with their sounds, and cancels an idle power-down. */
+    /**
+     * Turns the lightsabers in the creature's hands on and keeps them on, or
+     * lets them go, with their sounds. Kept on, as saber mode keeps them,
+     * neither the end of combat nor an idle power-down turns them off. Let
+     * go, they power down, unless the creature is in combat, whose end then
+     * powers them down as it would have.
+     */
     void setLightsabersOn(bool on);
+    bool lightsabersKeptOn() const { return _lightsabersKeptOn; }
 
     bool isInCombat() const { return _combatState.active; }
     bool isDebilitated() const;
@@ -568,6 +575,7 @@ private:
     std::shared_ptr<audio::AudioSource> _audioSourceFootstep;
     bool _lightsaberIdlePowerDownPending {false};
     Timer _lightsaberIdlePowerDownTimer;
+    bool _lightsabersKeptOn {false}; /**< by setLightsabersOn */
 
     // Animation
 

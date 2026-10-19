@@ -112,12 +112,14 @@ private:
  *   which only pause it; and with a new area, another party leader or the
  *   character's death.
  *
- * The blade hits the hostile creatures it touches during an attack or a spin
- * (JaSaberContacts), once a move, through KOTOR's own damage: a creature
- * that can't block a lightsaber (jaCanBlockSaber) dies to the hit, and one
- * that can takes the weapon's damage for an ordinary hit, with no attack
- * roll. Blocking, deflection and enemies' real-time attacks are not part of
- * saber mode yet.
+ * The saber stays lit in saber mode, as in Jedi Academy, through the end of
+ * KOTOR's combat (Creature::setLightsabersOn). Its blade hits the hostile
+ * creatures it touches during an attack or a spin (JaSaberContacts), once a
+ * move, through KOTOR's own damage: a creature that can't block a lightsaber
+ * (jaCanBlockSaber) dies to the hit, and one that can takes the weapon's
+ * damage for an ordinary hit, with no attack roll. The blade is the
+ * character's only attack: KOTOR's own are dropped. Blocking, deflection and
+ * enemies' real-time attacks are not part of saber mode yet.
  */
 class JaSaber : boost::noncopyable {
 public:
@@ -258,6 +260,9 @@ public:
     /** How many hits the blade has made since saber mode last started. */
     int hitCount() const { return _hitCount; }
 
+    /** How thick the blades cut, in metres: kJaBladeTraceUnits at the body's scale. */
+    float bladeRadius() const { return _contacts.bladeRadius(); }
+
 private:
     struct Keys {
         bool forward {false};
@@ -296,6 +301,7 @@ private:
     JaSaberContacts _contacts;
     int _moveSerial {0}; /**< counts the moves started, so each move hits a creature once */
     int _hitCount {0};
+    int _litBlades {-1}; /**< how many blades were lit on the last tick, for the log */
     bool _engage {false};
     uint32_t _engaged {0}; /**< the creature engaging goes for */
 
@@ -309,6 +315,12 @@ private:
     void updateContacts(const std::shared_ptr<Creature> &creature);
     /** Turns to the nearest enemy and sets the input to go for it, for setEngage. */
     void engage(const Creature &creature);
+    /**
+     * Drops an attack of KOTOR's own from \p creature's actions, as a combat
+     * round queues one for the party leader when its target falls, so that it
+     * and the blade can't both hit.
+     */
+    void dropKotorAttacks(Creature &creature);
     /** Applies one of the blade's hits on \p target. */
     void strike(Creature &attacker, Creature &target, const JaSaberHit &hit);
     /** Moves saber mode's camera on by \p dt and shows its view. */

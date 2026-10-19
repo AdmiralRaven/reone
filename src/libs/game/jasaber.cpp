@@ -17,6 +17,7 @@
 
 #include "reone/game/jasaber.h"
 
+#include "reone/game/action.h"
 #include "reone/game/attack.h"
 #include "reone/game/console.h"
 #include "reone/game/game.h"
@@ -243,6 +244,7 @@ void JaSaber::enter() {
     _contacts.setBladeRadius(kJaBladeTraceUnits * body.retargeter->scale());
     _moveSerial = 0;
     _hitCount = 0;
+    _litBlades = -1;
     _active = true;
     showPose();
     _game.setRelativeMouseMode(true);
@@ -523,7 +525,12 @@ void JaSaber::updateContacts(const std::shared_ptr<Creature> &creature) {
     }
     const auto &machine = _driver->machine();
     bool hits = jaMoveHits(machine.moves().move(machine.move()));
-    for (auto &hit : _contacts.update(_moveSerial, hits, blades(), targets)) {
+    auto lit = blades();
+    if (static_cast<int>(lit.size()) != _litBlades) {
+        _litBlades = static_cast<int>(lit.size());
+        info(str(boost::format("jasaber: %d %s lit at %.3f s") % _litBlades % (_litBlades == 1 ? "blade" : "blades") % _modeTime));
+    }
+    for (auto &hit : _contacts.update(_moveSerial, hits, lit, targets)) {
         auto target = _game.getObjectById<Creature>(hit.target);
         if (target && !target->isDead()) {
             strike(*creature, *target, hit);
@@ -574,6 +581,16 @@ void JaSaber::engage(const Creature &creature) {
         info(str(boost::format("jasaber: no enemy left to engage, at %.3f s") % _modeTime));
     }
     _scripted = held;
+}
+
+void JaSaber::dropKotorAttacks(Creature &creature) {
+    for (auto &action : creature.actions()) {
+        if (action && action->type() == ActionType::AttackObject) {
+            creature.clearAllActions();
+            info(str(boost::format("jasaber: dropped KOTOR's own attack at %.3f s; in saber mode the blade attacks") % _modeTime));
+            return;
+        }
+    }
 }
 
 void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit) {
@@ -637,6 +654,7 @@ bool JaSaber::update(float dt) {
         return false;
     }
     _modeTime += dt;
+    dropKotorAttacks(*creature);
     if (_engage) {
         engage(*creature);
     }
