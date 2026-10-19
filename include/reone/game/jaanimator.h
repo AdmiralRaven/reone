@@ -150,19 +150,23 @@ private:
  *   whole body if the player stands, and on the torso alone if he moves, as
  *   PM_SetSaberMove has it (bg_pmove.cpp:9174, 9491-9505); but a spin plays
  *   on the whole body either way (9487-9490);
- * - a move on the whole body holds the legs until its hold runs out
- *   (bg_panimate.cpp:4849-4850), even if the player moves meanwhile: moving
- *   doesn't cut a spin short (PM_Footsteps, bg_pmove.cpp:7960-7963, 8364);
- * - otherwise moving plays Jedi Academy's saber-out walk or run on the legs,
- *   at the speed g_noFootSlide gives it, and on the torso too in the ready
- *   stance (bg_pmove.cpp:9419-9448); the legs turn toward the movement and
- *   the torso back toward the view; standing again blends the legs back into
- *   the stance, and the torso in the ready stance;
- * - while the legs play a spin they face the view, and so the torso isn't
- *   turned either (cg_players.cpp:2575-2587, 2022-2027);
+ * - a move on the whole body holds the legs for its hold, since held legs
+ *   take no new clip (bg_panimate.cpp:4849-4850), but moving takes them from
+ *   any move but a spin at once (PM_Footsteps, bg_pmove.cpp:8364-8378, with
+ *   PM_SetAnim's override, bg_panimate.cpp:5091-5108); a spin keeps them
+ *   until its hold runs out (bg_pmove.cpp:7960-7963);
+ * - moving with the legs free plays Jedi Academy's saber-out walk or run on
+ *   them, at the speed g_noFootSlide gives it, and on the torso too in the
+ *   ready stance (bg_pmove.cpp:9419-9448);
+ * - standing still with the legs free, they take up the torso's move where
+ *   the torso is (8238-8247; bg_panimate.cpp:4879-4883), and in the ready
+ *   stance they blend back into the stance, the torso with them;
+ * - the legs turn toward the movement and the torso back toward the view;
+ *   but while the legs play a spin they face the view, and so the torso
+ *   isn't turned either (cg_players.cpp:2575-2587, 2022-2027);
  * - the fast style moves at full speed while attacking, but at 3/4 of it
  *   backwards during an attack, and at half of it while the legs play a spin
- *   (ClientThink_real, g_active.cpp:4562-4594; 4595-4613 slows only the
+ *   (ClientAlterSpeed, g_active.cpp:4562-4594; 4595-4613 slows only the
  *   other styles); running backwards then takes 3/4 of that (4659-4664).
  */
 class JaSaberDriver : boost::noncopyable {

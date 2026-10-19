@@ -274,16 +274,20 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
         }
     }
 
-    bool ready = _machine.move() == moves.ready();
+    const auto &current = moves.move(_machine.move());
+    bool ready = current.id == moves.ready();
     const auto &locomotion = locomotionClips();
-    bool legsFree = _legsHold <= 0.0f;
+    // Held legs take no new clip, but moving takes them from any move but a
+    // spin, its hold notwithstanding.
+    bool legsFree = _legsHold <= 0.0f || (result.moving && !_legsSpin);
     if (result.moving && legsFree) {
         // The legs walk or run from this tick on, below.
+        _legsHold = 0.0f;
         _legsSpin = false;
     }
     if (result.moving) {
         bool backwards = input.forward < 0;
-        if (backwards && moves.move(_machine.move()).kind == JaMoveKind::Attack) {
+        if (backwards && current.kind == JaMoveKind::Attack) {
             result.speedScale = kBackwardsAttackSpeed;
         } else if (_legsSpin) {
             result.speedScale = kSpinSpeed;
@@ -307,16 +311,21 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
         } else if (ready) {
             _animator.play(JaBodyAnimator::kTorso, clip, rate, 0.0f, false);
         }
+    } else if (!result.moving && legsFree && !ready) {
+        // Standing still while the torso plays a move: the legs take it up
+        // where the torso is.
+        if (_animator.clip(JaBodyAnimator::kLegs) != current.clip) {
+            const auto &timing = _machine.timing(current.id);
+            _animator.play(JaBodyAnimator::kLegs, current.clip, timing.rate, kLegsBlend, false);
+            _legsSpin = current.spin;
+        }
     } else if (!result.moving && legsFree &&
                std::find(locomotion.begin(), locomotion.end(), _animator.clip(JaBodyAnimator::kLegs)) != locomotion.end()) {
-        // Stopping: the legs back into the ready stance, and the torso too
-        // unless a move plays on it.
-        const auto &stance = moves.move(moves.ready());
-        const auto &timing = _machine.timing(stance.id);
-        _animator.play(JaBodyAnimator::kLegs, stance.clip, timing.rate, kLegsBlend);
-        if (ready) {
-            _animator.play(JaBodyAnimator::kTorso, stance.clip, timing.rate, timing.blendMs / 1000.0f);
-        }
+        // Stopping in the ready stance: the legs back into it, and the torso
+        // too.
+        const auto &timing = _machine.timing(current.id);
+        _animator.play(JaBodyAnimator::kLegs, current.clip, timing.rate, kLegsBlend);
+        _animator.play(JaBodyAnimator::kTorso, current.clip, timing.rate, timing.blendMs / 1000.0f);
     }
 
     if (_legsSpin) {
