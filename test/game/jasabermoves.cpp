@@ -417,6 +417,50 @@ TEST(JaSaberStateMachine, should_decide_on_the_first_tick_after_a_move_runs_out)
     EXPECT_EQ(expected, started);
 }
 
+TEST(JaSaberStateMachine, should_run_a_hold_of_whole_ticks_out_on_its_last_tick) {
+    for (int hz : {30, 60, 120, 144, 240}) {
+        // given: Jedi Academy's swing, whose spin holds for 400 ms, 24 ticks
+        // at 60 Hz
+        JaSaberStateMachine machine(moves(), namedSwingClips());
+        ASSERT_EQ(400, machine.timing(id("LS_T1_BR_TL")).holdMs);
+        std::vector<Started> started;
+
+        // when: holding forward, right and the button, round once
+        for (int frame = 0; frame <= 2 * hz && started.size() < 4; ++frame) {
+            for (int move : machine.tick(frame == 0 ? 0.0f : 1.0f / static_cast<float>(hz), holding(true, 1, 1))) {
+                started.push_back({frame, name(move)});
+            }
+        }
+
+        // then: each move starts on the first tick at or after its
+        // predecessor's hold ran out, the spin's too: at 60 Hz on its 24th
+        // tick, not the 25th
+        auto ticks = [hz](int ms) { return (ms * hz + 999) / 1000; };
+        int attack = ticks(349);
+        int spin = attack + ticks(169);
+        std::vector<Started> expected {{0, "LS_S_TL2BR"}, {attack, "LS_A_TL2BR"}, {spin, "LS_T1_BR_TL"}, {spin + ticks(400), "LS_A_TL2BR"}};
+        EXPECT_EQ(expected, started) << hz << " Hz";
+    }
+}
+
+TEST(JaSaberTimers, should_run_out_on_the_first_tick_at_or_after_their_time) {
+    for (int hz : {24, 30, 50, 60, 75, 120, 144, 165, 240}) {
+        float dt = 1.0f / static_cast<float>(hz);
+        for (int hold = 1; hold <= 3000; ++hold) {
+            double left = hold;
+            int ticks = 0;
+            while (left > 0.0) {
+                left = jaCountDown(left, dt);
+                ++ticks;
+            }
+            ASSERT_EQ((hold * hz + 999) / 1000, ticks) << hold << " ms at " << hz << " Hz";
+        }
+    }
+    // and nothing counts it up
+    EXPECT_DOUBLE_EQ(400.0, jaCountDown(400.0, 0.0f));
+    EXPECT_DOUBLE_EQ(400.0, jaCountDown(400.0, -1.0f));
+}
+
 TEST(JaSaberLocomotion, should_turn_the_legs_toward_the_movement) {
     EXPECT_FLOAT_EQ(0.0f, jaLegsYawTarget(0, 0));
     EXPECT_FLOAT_EQ(0.0f, jaLegsYawTarget(1, 0));

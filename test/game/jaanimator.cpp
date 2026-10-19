@@ -572,8 +572,7 @@ TEST(JaSaberDriver, should_spin_on_the_whole_body_on_the_move_at_half_speed_faci
 }
 
 TEST(JaSaberDriver, should_free_the_legs_from_a_spin_on_the_tick_the_torso_moves_on) {
-    // given: a spin that holds for 400 ms, 24 ticks at 60 Hz, a length the
-    // timers count to within floating-point rounding
+    // given: a spin that holds for 400 ms, 24 ticks at 60 Hz
     auto clips = saberClips();
     clips["BOTH_T1_BR_TL"] = {0, 3, -1, 3.34f};
     SaberBody body(clips);
@@ -600,7 +599,8 @@ TEST(JaSaberDriver, should_free_the_legs_from_a_spin_on_the_tick_the_torso_moves
     }
     std::vector<std::string> expected {"LS_S_TL2BR", "LS_A_TL2BR", "LS_T1_BR_TL", "LS_A_TL2BR"};
     EXPECT_EQ(expected, played);
-    EXPECT_GE(spinTicks, 24);
+    // and the spin plays for its 24 ticks, no more
+    EXPECT_EQ(24, spinTicks);
 }
 
 TEST(JaSaberDriver, should_play_a_transition_that_isnt_a_spin_on_the_torso_on_the_move) {

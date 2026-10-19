@@ -275,6 +275,13 @@ int jaFrameLerp(float fps) {
     return fps < 0.0f ? static_cast<int>(std::floor(1000.0f / fps)) : static_cast<int>(std::ceil(1000.0f / fps));
 }
 
+double jaCountDown(double timerMs, float dt) {
+    // In double precision, so that the rounding stays far below the slack
+    // however long the hold.
+    double left = timerMs - std::max(0.0, static_cast<double>(dt) * 1000.0);
+    return left < kJaTimerSlackMs ? 0.0 : left;
+}
+
 // The rate JaSequencer samples a clip at.
 static float ownRate(const GhoulAnimationClip &clip) {
     return clip.fps != 0.0f ? std::abs(clip.fps) : 20.0f;
@@ -329,8 +336,8 @@ JaSaberStateMachine::JaSaberStateMachine(
 
 void JaSaberStateMachine::reset() {
     _move = _moves.ready();
-    _torsoTimer = 0.0f;
-    _weaponTime = 0.0f;
+    _torsoTimer = 0.0;
+    _weaponTime = 0.0;
 }
 
 bool JaSaberStateMachine::set(int id, std::vector<int> &started) {
@@ -340,34 +347,33 @@ bool JaSaberStateMachine::set(int id, std::vector<int> &started) {
     }
     // Only a move that cuts in may replace a clip that still holds the body
     // (bg_panimate.cpp:4866; bg_pmove.cpp:9528, 9637-9638).
-    if (move.hold != JaMoveHold::Active && _torsoTimer > 0.0f) {
+    if (move.hold != JaMoveHold::Active && _torsoTimer > 0.0) {
         return false;
     }
     _move = id;
-    _torsoTimer = static_cast<float>(_timings[id].holdMs);
+    _torsoTimer = static_cast<double>(_timings[id].holdMs);
     started.push_back(id);
     return true;
 }
 
 std::vector<int> JaSaberStateMachine::tick(float dt, const JaSaberInput &input) {
     std::vector<int> started;
-    float elapsed = std::max(0.0f, dt * 1000.0f);
     // PM_DropTimers and PM_WeaponLightsaber (bg_pmove.cpp:14320-14361, 11947-11953)
-    _torsoTimer = std::max(0.0f, _torsoTimer - elapsed);
-    _weaponTime = std::max(0.0f, _weaponTime - elapsed);
+    _torsoTimer = jaCountDown(_torsoTimer, dt);
+    _weaponTime = jaCountDown(_weaponTime, dt);
     bool direction = input.forward != 0 || input.right != 0;
     const JaSaberMove &current = _moves.move(_move);
 
-    if (_weaponTime > 0.0f) {
+    if (_weaponTime > 0.0) {
         // Busy (bg_pmove.cpp:12224-12276). Moving during a return with the
         // button up frees the saber, though the return plays on (12231-12244,
         // 12497, 12541-12549).
         if (current.kind == JaMoveKind::Return && !input.attack && direction) {
-            _weaponTime = 0.0f;
+            _weaponTime = 0.0;
         }
     } else if (!input.attack) {
         // The button is up as the move ends (12495-12550).
-        _weaponTime = 0.0f;
+        _weaponTime = 0.0;
         int next = JaSaberMoves::kNone;
         switch (current.kind) {
         case JaMoveKind::Start:
@@ -400,12 +406,12 @@ std::vector<int> JaSaberStateMachine::tick(float dt, const JaSaberInput &input) 
         }
         set(next, started);
         // 12787-12791, 12806-12889
-        _weaponTime = _torsoTimer > 0.0f ? _torsoTimer : static_cast<float>(_fireTimeMs);
+        _weaponTime = _torsoTimer > 0.0 ? _torsoTimer : static_cast<double>(_fireTimeMs);
     }
 
     // The idle torso (bg_panimate.cpp:5200-5223): a return goes back to ready
     // once the saber is free and the return has run out.
-    if (_weaponTime <= 0.0f && _moves.move(_move).kind == JaMoveKind::Return) {
+    if (_weaponTime <= 0.0 && _moves.move(_move).kind == JaMoveKind::Return) {
         set(_moves.ready(), started);
     }
     return started;

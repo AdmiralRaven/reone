@@ -153,6 +153,19 @@ private:
 /** Ghoul2's milliseconds per frame for an animation.cfg rate (NPC_stats.cpp:986-1008). */
 int jaFrameLerp(float fps);
 
+/**
+ * A remainder of a hold timer that counts as run out. Jedi Academy's timers
+ * count whole milliseconds (PM_DropTimers, bg_pmove.cpp:14320-14361); these
+ * count fractions of them, and less than this left is rounding, not time.
+ */
+constexpr double kJaTimerSlackMs = 0.01;
+
+/**
+ * \p timerMs counted down by \p dt seconds, never below zero. A hold of
+ * exactly n ticks runs out on the n-th: 400 ms on the 24th tick at 60 Hz.
+ */
+double jaCountDown(double timerMs, float dt);
+
 /** How \p move plays \p clip. */
 JaMoveTiming jaMoveTiming(const JaSaberMove &move, const graphics::GhoulAnimationClip &clip);
 
@@ -204,8 +217,8 @@ public:
     const JaSaberMoves &moves() const { return _moves; }
     int move() const { return _move; }
     const JaMoveTiming &timing(int move) const { return _timings.at(move); }
-    float holdTimerMs() const { return _torsoTimer; }
-    float weaponTimeMs() const { return _weaponTime; }
+    float holdTimerMs() const { return static_cast<float>(_torsoTimer); }
+    float weaponTimeMs() const { return static_cast<float>(_weaponTime); }
 
 private:
     const JaSaberMoves &_moves;
@@ -213,8 +226,8 @@ private:
     int _fireTimeMs;
 
     int _move {0};
-    float _torsoTimer {0.0f}; /**< how long the current clip still holds the body */
-    float _weaponTime {0.0f}; /**< how long until input counts again */
+    double _torsoTimer {0.0}; /**< how long the current clip still holds the body, in ms */
+    double _weaponTime {0.0}; /**< how long until input counts again, in ms */
 
     bool set(int move, std::vector<int> &started);
 };
