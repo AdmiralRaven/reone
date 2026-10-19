@@ -382,10 +382,14 @@ TEST(JaSaberContacts, should_not_sweep_from_a_blade_before_a_reset_or_a_jump) {
     // then: nothing was swept, so nothing is hit
     EXPECT_TRUE(contacts.update(1, true, {levelBlade(1.0f)}, targets).empty());
 
-    // when: the character is moved somewhere else at once, across the post
-    contacts.update(2, true, {levelBlade(-20.0f)}, targets);
-    // then: no blade sweeps the space between
-    EXPECT_TRUE(contacts.update(2, true, {levelBlade(20.0f)}, targets).empty());
+    // when: the character is moved somewhere else at once, so that the
+    // blade jumps from right of the post, across it, to 20 m left of it, and
+    // then most of the way back
+    // then: no blade sweeps the space between, either way
+    EXPECT_TRUE(contacts.update(2, true, {levelBlade(-20.0f)}, targets).empty());
+    EXPECT_TRUE(contacts.update(2, true, {levelBlade(-1.0f)}, targets).empty());
+    // and from there, the blade sweeps again: across the post, it hits
+    EXPECT_EQ(1u, contacts.update(2, true, {levelBlade(1.0f)}, targets).size());
 }
 
 TEST(JaSaberContacts, should_hit_with_either_blade) {
