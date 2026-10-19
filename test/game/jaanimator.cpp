@@ -405,15 +405,18 @@ TEST(JaSaberDriver, should_join_the_legs_to_the_torsos_move_on_standing_still) {
     std::string torso(driver.animator().clip(JaBodyAnimator::kTorso));
     ASSERT_EQ(std::string("BOTH_S1_S1_T_"), torso);
     ASSERT_EQ(std::string("BOTH_RUN2"), driver.animator().clip(JaBodyAnimator::kLegs));
+    float torsoTime = driver.animator().clipTime(JaBodyAnimator::kTorso);
+    ASSERT_GT(torsoTime, 0.0f);
 
     // when: letting go of the movement
     auto step = driver.step(kTick, JaSaberInput(), false, 5.0f);
 
-    // then: the legs take up the torso's move where the torso is, blending
-    // into it, while the torso plays on
+    // then: the torso plays on, and the legs take up its move where it is,
+    // blending into it
     EXPECT_FALSE(step.moving);
-    EXPECT_EQ(torso, driver.animator().clip(JaBodyAnimator::kLegs));
     EXPECT_EQ(torso, driver.animator().clip(JaBodyAnimator::kTorso));
+    EXPECT_GT(driver.animator().clipTime(JaBodyAnimator::kTorso), torsoTime);
+    EXPECT_EQ(torso, driver.animator().clip(JaBodyAnimator::kLegs));
     EXPECT_FLOAT_EQ(driver.animator().clipTime(JaBodyAnimator::kTorso), driver.animator().clipTime(JaBodyAnimator::kLegs));
     EXPECT_TRUE(driver.animator().isBlending(JaBodyAnimator::kLegs));
 
