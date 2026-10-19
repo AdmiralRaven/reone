@@ -148,17 +148,22 @@ private:
  *
  * - each saber move JaSaberStateMachine starts plays with its blend on the
  *   whole body if the player stands, and on the torso alone if he moves, as
- *   PM_SetSaberMove has it (bg_pmove.cpp:9174, 9491-9505);
+ *   PM_SetSaberMove has it (bg_pmove.cpp:9174, 9491-9505); but a spin plays
+ *   on the whole body either way (9487-9490);
  * - a move on the whole body holds the legs until its hold runs out
- *   (bg_panimate.cpp:4849-4850), even if the player moves meanwhile;
+ *   (bg_panimate.cpp:4849-4850), even if the player moves meanwhile: moving
+ *   doesn't cut a spin short (PM_Footsteps, bg_pmove.cpp:7960-7963, 8364);
  * - otherwise moving plays Jedi Academy's saber-out walk or run on the legs,
  *   at the speed g_noFootSlide gives it, and on the torso too in the ready
  *   stance (bg_pmove.cpp:9419-9448); the legs turn toward the movement and
  *   the torso back toward the view; standing again blends the legs back into
  *   the stance, and the torso in the ready stance;
+ * - while the legs play a spin they face the view, and so the torso isn't
+ *   turned either (cg_players.cpp:2575-2587, 2022-2027);
  * - the fast style moves at full speed while attacking, but at 3/4 of it
- *   backwards during an attack (ClientThink_real, g_active.cpp:4562-4567;
- *   4595-4613 slows only the other styles).
+ *   backwards during an attack, and at half of it while the legs play a spin
+ *   (ClientThink_real, g_active.cpp:4562-4594; 4595-4613 slows only the
+ *   other styles); running backwards then takes 3/4 of that (4659-4664).
  */
 class JaSaberDriver : boost::noncopyable {
 public:
@@ -170,6 +175,12 @@ public:
 
     /** How fast the fast style moves backwards during an attack (g_active.cpp:4562-4567). */
     static constexpr float kBackwardsAttackSpeed = 0.75f;
+
+    /** How fast the character moves while its legs play a spin (g_active.cpp:4587-4594). */
+    static constexpr float kSpinSpeed = 0.5f;
+
+    /** The share of the speed the rest gives that running backwards, not walking, keeps (g_active.cpp:4659-4664). */
+    static constexpr float kBackwardsRunSpeed = 0.75f;
 
     /** The saber-out walks and runs (PM_Footsteps, bg_pmove.cpp:8417-8595). */
     static const std::vector<std::string> &locomotionClips();
@@ -205,6 +216,7 @@ private:
     JaBodyAnimator _animator;
     float _legsYaw {0.0f};
     float _legsHold {0.0f}; /**< how much longer a move on the whole body holds the legs, in seconds */
+    bool _legsSpin {false}; /**< whether the legs play a spin */
 };
 
 } // namespace game

@@ -73,6 +73,12 @@ struct JaSaberMove {
     int blendMs {0};        /**< blend into the move (bg_pmove.cpp:9525) */
     float timeScale {1.0f}; /**< 1.5 for the fast style's transitions (bg_panimate.cpp:4516-4531) */
     int chainAttack {-1};   /**< the next move when the attack button is held and nothing else is chosen */
+    /**
+     * A spin: one of the 12 transitions that turn the whole body around
+     * (PM_SpinningSaberAnim, bg_pmove.cpp:7022-7038). Jedi Academy plays it on
+     * the whole body even on the move, and slows the movement while it plays.
+     */
+    bool spin {false};
 };
 
 /** How a move plays its clip. */

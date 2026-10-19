@@ -243,6 +243,8 @@ JaSaberDriver::JaSaberDriver(
 void JaSaberDriver::start(const JaRetargeter::Pose &pose) {
     _machine.reset();
     _legsYaw = 0.0f;
+    _legsHold = 0.0f;
+    _legsSpin = false;
     _animator.hold(pose);
     const auto &moves = _machine.moves();
     const auto &ready = moves.move(moves.ready());
@@ -258,23 +260,38 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
     const auto &moves = _machine.moves();
     result.moving = input.forward != 0 || input.right != 0;
     for (int id : result.started) {
+        const auto &move = moves.move(id);
         const auto &timing = _machine.timing(id);
-        if (!result.moving) {
-            _animator.play(JaBodyAnimator::kBody, moves.move(id).clip, timing.rate, timing.blendMs / 1000.0f);
+        if (!result.moving || move.spin) {
+            // Standing, and for a spin on the move too, the whole body.
+            _animator.play(JaBodyAnimator::kBody, move.clip, timing.rate, timing.blendMs / 1000.0f);
             _legsHold = timing.holdMs / 1000.0f;
+            _legsSpin = move.spin;
         } else if (id != moves.ready()) {
             // The legs go on walking or running; the ready stance takes up
             // their clip on the torso, below.
-            _animator.play(JaBodyAnimator::kTorso, moves.move(id).clip, timing.rate, timing.blendMs / 1000.0f);
+            _animator.play(JaBodyAnimator::kTorso, move.clip, timing.rate, timing.blendMs / 1000.0f);
         }
     }
 
     bool ready = _machine.move() == moves.ready();
-    if (result.moving && input.forward < 0 && moves.move(_machine.move()).kind == JaMoveKind::Attack) {
-        result.speedScale = kBackwardsAttackSpeed;
-    }
     const auto &locomotion = locomotionClips();
     bool legsFree = _legsHold <= 0.0f;
+    if (result.moving && legsFree) {
+        // The legs walk or run from this tick on, below.
+        _legsSpin = false;
+    }
+    if (result.moving) {
+        bool backwards = input.forward < 0;
+        if (backwards && moves.move(_machine.move()).kind == JaMoveKind::Attack) {
+            result.speedScale = kBackwardsAttackSpeed;
+        } else if (_legsSpin) {
+            result.speedScale = kSpinSpeed;
+        }
+        if (backwards && !walk) {
+            result.speedScale *= kBackwardsRunSpeed;
+        }
+    }
     if (result.moving && legsFree) {
         std::string clip(jaLocomotionClip(input.forward, walk));
         float rate = jaFootSlideRate(_sequencer.clip(clip), walk, speed * result.speedScale / _retargeter.scale());
@@ -302,9 +319,14 @@ JaSaberDriver::Step JaSaberDriver::step(float dt, const JaSaberInput &input, boo
         }
     }
 
-    float target = result.moving ? glm::radians(jaLegsYawTarget(input.forward, input.right)) : 0.0f;
-    float turn = (result.moving ? kLegsTurnMoving : kLegsTurnStanding) * std::max(0.0f, dt);
-    _legsYaw += glm::clamp(target - _legsYaw, -turn, turn);
+    if (_legsSpin) {
+        // A spin turns the body round as it plays, from the view.
+        _legsYaw = 0.0f;
+    } else {
+        float target = result.moving ? glm::radians(jaLegsYawTarget(input.forward, input.right)) : 0.0f;
+        float turn = (result.moving ? kLegsTurnMoving : kLegsTurnStanding) * std::max(0.0f, dt);
+        _legsYaw += glm::clamp(target - _legsYaw, -turn, turn);
+    }
     return result;
 }
 

@@ -228,6 +228,27 @@ TEST(JaSaberMoves, should_chain_straight_on_only_where_the_next_attack_starts) {
     EXPECT_EQ("none", name(moves().transition(JaQuad::BR, JaQuad::B)));
 }
 
+TEST(JaSaberMoves, should_mark_the_fast_styles_spins) {
+    // PM_SpinningSaberAnim's clips for the fast style (bg_pmove.cpp:7027-7038)
+    std::set<std::string> expected {
+        "BOTH_T1_BR_BL", "BOTH_T1__R__L", "BOTH_T1__R_BL", "BOTH_T1_TR_BL", "BOTH_T1_BR_TL", "BOTH_T1_BR__L",
+        "BOTH_T1_TL_BR", "BOTH_T1__L_BR", "BOTH_T1__L__R", "BOTH_T1_BL_BR", "BOTH_T1_BL__R", "BOTH_T1_BL_TR"};
+    std::set<std::string> spins;
+    for (auto &move : moves().moves()) {
+        if (move.spin) {
+            EXPECT_EQ(JaMoveKind::Transition, move.kind) << move.name;
+            spins.insert(move.clip);
+        }
+    }
+    EXPECT_EQ(expected, spins);
+
+    // Holding forward and right goes round through one, as can going on from
+    // the bottom; going on from a return to the same attack doesn't.
+    EXPECT_TRUE(moves().move(moves().nextMove(id("LS_A_TL2BR"), id("LS_A_TL2BR"))).spin);
+    EXPECT_TRUE(moves().move(moves().nextMove(id("LS_A_T2B"), id("LS_A_BR2TL"))).spin);
+    EXPECT_FALSE(moves().move(moves().nextMove(id("LS_R_TL2BR"), id("LS_A_TL2BR"))).spin);
+}
+
 TEST(JaSaberMoves, should_time_moves_as_ghoul2_holds_them) {
     EXPECT_EQ(34, jaFrameLerp(30.0f));
     EXPECT_EQ(50, jaFrameLerp(20.0f));
