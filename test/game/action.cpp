@@ -830,6 +830,37 @@ std::shared_ptr<Item> medpacItem(TestEngine &engine, Game &game, int stackSize) 
     return item;
 }
 
+// Every creature an enemy of every other while it lives, for a test that
+// needs hostility; the engine's mocks are shared by every test, so the
+// reputes take their default answer back afterwards.
+class AllHostile : boost::noncopyable {
+public:
+    explicit AllHostile(TestEngine &engine) :
+        _reputes(static_cast<MockReputes &>(engine.services().game.reputes)) {
+        EXPECT_CALL(_reputes, getIsEnemy(An<const Creature &>(), An<const Creature &>()))
+            .Times(AnyNumber())
+            .WillRepeatedly(Return(true));
+    }
+
+    ~AllHostile() {
+        EXPECT_CALL(_reputes, getIsEnemy(An<const Creature &>(), An<const Creature &>()))
+            .Times(AnyNumber());
+    }
+
+private:
+    MockReputes &_reputes;
+};
+
+int pendingAttacks(const Creature &creature) {
+    int count = 0;
+    for (const auto &action : creature.actions()) {
+        if (action->type() == ActionType::AttackObject && !action->isCompleted()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 } // namespace
 
 TEST(CombatEnd, should_end_combat_after_a_kill_cuts_the_last_round_short) {
@@ -913,6 +944,44 @@ TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_a_kill_ends_a_duel) {
 
     // then: as after a finished round, the leader leaves combat at once
     EXPECT_FALSE(leader->isInCombat());
+}
+
+TEST(CombatEnd, should_follow_a_finished_duel_with_one_attack) {
+    // given: an enemy that survives attacking the party leader, the leader
+    // attacking it back second in the same round, in a module where it is
+    // hostile
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    AllHostile hostile(engine);
+    TestGameModule::setActiveModuleArea(game, nullptr);
+    auto leader = game.newCreature();
+    leader->setCurrentHitPoints(10);
+    game.party().addMember(kNpcPlayer, leader);
+    auto enemy = game.newCreature();
+    enemy->setCurrentHitPoints(10);
+    auto counter = game.newAction<AttackObjectAction>(leader);
+    enemy->addAction(counter);
+    game.combat().addAction(counter, *enemy);
+    auto attack = game.newAction<AttackObjectAction>(enemy);
+    leader->addAction(attack);
+    game.combat().addAction(attack, *leader);
+    ASSERT_EQ(1u, game.combat().roundCount());
+
+    // when: the round ends, and its end queues the leader's next attack;
+    // then the enemy's attack ends and leaves its queue while the leader's,
+    // second, still runs, as its blow lands later
+    for (float time = 0.0f; time < 3.1f; time += kTick) {
+        game.combat().update(kTick);
+    }
+    ASSERT_EQ(2, pendingAttacks(*leader));
+    counter->complete();
+    enemy->update(kTick);
+    ASSERT_TRUE(enemy->actions().empty());
+    game.combat().update(kTick);
+
+    // then: one attack follows the round, not two
+    EXPECT_EQ(1, pendingAttacks(*leader));
 }
 
 TEST(CombatEnd, should_end_the_leaders_combat_at_once_when_its_round_ends_on_a_fallen_enemy) {
@@ -1061,6 +1130,35 @@ TEST(CastSpellFromItem, should_let_the_caster_move_again_when_a_cast_is_cancelle
 
     // then
     EXPECT_FALSE(user->isMovementRestricted());
+}
+
+TEST(CastSpellFromItem, should_keep_a_cast_under_way_holding_its_caster_when_the_next_is_cancelled) {
+    // given: a medpac being used, which holds its user in place, and the
+    // next one queued behind it
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    game.initLocalServices();
+    expectCastLookups(engine);
+    auto user = game.newCreature();
+    auto medpacs = medpacItem(engine, game, 2);
+    user->addItem(medpacs);
+    auto first = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpacs));
+    user->addAction(first);
+    play(game, {user}, 0.5f);
+    ASSERT_TRUE(user->isMovementRestricted());
+    auto next = game.newAction<CastSpellAtObjectAction>(medpacSpell(), user, std::optional(medpacs));
+    user->addAction(next);
+
+    // when: the queue is cleared, as Disengage clears it: from the back, up
+    // to the cast under way, which its animation locks
+    user->clearAllActions(/*force=*/false);
+    ASSERT_EQ(1u, user->actions().size());
+
+    // then: the cast under way still holds its user
+    EXPECT_TRUE(next->isCompleted());
+    EXPECT_FALSE(first->isCompleted());
+    EXPECT_TRUE(user->isMovementRestricted());
 }
 
 TEST(CastSpellFromItem, should_not_cast_from_an_item_gone_before_its_use) {

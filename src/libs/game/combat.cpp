@@ -418,13 +418,18 @@ void Combat::pruneInvalidRounds() {
 
         if (!bindingsLive ||
             (round.state != CombatRound::Finished && anyActionFinished)) {
+            bool cutShort = round.state != CombatRound::Finished;
             cancelRound(round);
-            deactivateParticipants(round);
-            if (leaderActionBound) {
-                // The round ended before its time around the leader's
-                // action, as when its target, or the enemy it duels, falls:
-                // what follows is what follows a round.
-                followUpLeaderAttack(_game, _services, round);
+            // A finished round has had its end, in finishRound. One cut
+            // short has it here: its participants leave combat after the
+            // delay, and when it ended early around the leader's action, as
+            // when the leader's target, or the enemy it duels, falls, the
+            // leader gets what follows a round.
+            if (cutShort) {
+                deactivateParticipants(round);
+                if (leaderActionBound) {
+                    followUpLeaderAttack(_game, _services, round);
+                }
             }
             it = _rounds.erase(it);
         } else if (round.state == CombatRound::Finished && actionsFinished) {

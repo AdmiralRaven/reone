@@ -56,6 +56,7 @@ private:
     SpellSchedule _schedule;
     std::optional<Grenade> _grenade;
     bool _cheat;
+    bool _holdsCaster {false};
 };
 
 } // namespace game

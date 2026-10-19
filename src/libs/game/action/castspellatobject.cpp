@@ -109,6 +109,7 @@ void CastSpellAtObjectAction::execute(std::shared_ptr<Action> self, Object &acto
 
         caster.setMovementType(Creature::MovementType::None);
         caster.setMovementRestricted(true);
+        _holdsCaster = true;
 
         scene::AnimationProperties animProp =
             scene::AnimationProperties::fromFlags(scene::AnimationFlags::blend);
@@ -154,7 +155,12 @@ void CastSpellAtObjectAction::cancel(std::shared_ptr<Action> self, Object &actor
 }
 
 void CastSpellAtObjectAction::finish(Creature &caster) {
-    caster.setMovementRestricted(false);
+    // Only the hold this cast took: one queued behind a cast under way must
+    // not free its caster from that cast's (#31).
+    if (_holdsCaster) {
+        caster.setMovementRestricted(false);
+        _holdsCaster = false;
+    }
     complete();
 }
 
