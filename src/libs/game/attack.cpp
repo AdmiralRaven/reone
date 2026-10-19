@@ -569,6 +569,41 @@ void AttackBuffer::addPhysicalAttack(
     }
 }
 
+void AttackBuffer::addContactHit(
+    const Creature &attacker,
+    const Object &target,
+    const Item *weapon,
+    int extraDamage) {
+
+    _attacks.emplace_back(
+        Source::Main,
+        false,
+        AttackResultType::HitSuccessful,
+        0,
+        AttackBonusBreakdown(),
+        0,
+        true);
+    Attack &attack = _attacks.back();
+    attack.contact = true;
+    if (weapon) {
+        computeWeaponDamage(
+            attacker,
+            target,
+            *weapon,
+            Source::Main,
+            AttackResultType::HitSuccessful,
+            extraDamage,
+            attack.damage);
+    } else {
+        computeUnarmedDamage(
+            attacker,
+            target,
+            AttackResultType::HitSuccessful,
+            extraDamage,
+            attack.damage);
+    }
+}
+
 void AttackBuffer::resolveDamage(Object &target) {
     for (Attack &attack : _attacks) {
         if (attack.damage.empty()) {
@@ -627,7 +662,9 @@ void AttackBuffer::signalAttack(
     Creature &attacker,
     Object &target) {
 
-    addCombatFeedback(game, services, attacker, target, attack);
+    if (!attack.contact) {
+        addCombatFeedback(game, services, attacker, target, attack);
+    }
     applyEffects(attack, attacker, target, game);
 }
 

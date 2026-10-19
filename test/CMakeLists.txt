@@ -77,6 +77,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/game/jaanimator.cpp
     ${TESTS_SOURCE_DIR}/game/jacamera.cpp
     ${TESTS_SOURCE_DIR}/game/jaconsole.cpp
+    ${TESTS_SOURCE_DIR}/game/jacontact.cpp
     ${TESTS_SOURCE_DIR}/game/jaretarget.cpp
     ${TESTS_SOURCE_DIR}/game/jasaber.cpp
     ${TESTS_SOURCE_DIR}/game/jasabermoves.cpp

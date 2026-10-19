@@ -17,11 +17,13 @@
 
 #include "reone/game/jasaber.h"
 
+#include "reone/game/attack.h"
 #include "reone/game/console.h"
 #include "reone/game/game.h"
 #include "reone/game/object/area.h"
 #include "reone/game/object/camera/thirdperson.h"
 #include "reone/game/object/creature.h"
+#include "reone/game/object/item.h"
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
 #include "reone/game/player.h"
@@ -31,6 +33,7 @@
 #include "reone/graphics/types.h"
 #include "reone/scene/animproperties.h"
 #include "reone/scene/node/model.h"
+#include "reone/scene/node/modelnode.h"
 #include "reone/scene/types.h"
 #include "reone/system/logutil.h"
 #include "reone/system/stream/fileinput.h"
@@ -235,6 +238,11 @@ void JaSaber::enter() {
     _modeTime = 0.0f;
     _pitch = glm::clamp(pitch, -JaCamera::kMaxViewPitch, JaCamera::kMaxViewPitch);
     _view = view;
+    // The blades start over, as thick as JA's traces at this body's scale.
+    _contacts.reset();
+    _contacts.setBladeRadius(kJaBladeTraceUnits * body.retargeter->scale());
+    _moveSerial = 0;
+    _hitCount = 0;
     _active = true;
     showPose();
     _game.setRelativeMouseMode(true);
@@ -472,6 +480,118 @@ std::string JaSaber::moveName() const {
     return machine.moves().move(machine.move()).name;
 }
 
+std::vector<JaBlade> JaSaber::blades() const {
+    std::vector<JaBlade> result;
+    if (!_active || !_model || !_body) {
+        return result;
+    }
+    auto weapon = _model->getAttachment(kWeaponNode);
+    auto hand = _model->getNodeByName(kWeaponNode);
+    int handIndex = _body->retargeter->nodeIndex(kWeaponNode);
+    if (!weapon || weapon->type() != SceneNodeType::Model || !hand || handIndex < 0) {
+        return result;
+    }
+    // The hand where the pose shown now holds it, and the blades where the
+    // lightsaber's model holds them in the hand.
+    glm::mat4 handNow(_model->absoluteTransform() * _body->retargeter->transforms(_driver->pose())[handIndex]);
+    for (auto &blade : jaSaberBlades(static_cast<ModelSceneNode &>(*weapon), *hand)) {
+        result.push_back(jaTransformBlade(handNow, blade));
+    }
+    return result;
+}
+
+void JaSaber::updateContacts(const std::shared_ptr<Creature> &creature) {
+    auto module = _game.module();
+    auto area = module->area();
+    std::vector<JaContactTarget> targets;
+    for (auto &object : area->getObjectsByType(ObjectType::Creature)) {
+        auto other = std::static_pointer_cast<Creature>(object);
+        if (other == creature || other->isDead() || !module->isHostileToPartyLeader(*other) ||
+            glm::distance2(other->position(), creature->position()) > kHitReach * kHitReach) {
+            continue;
+        }
+        auto model = std::dynamic_pointer_cast<ModelSceneNode>(other->sceneNode());
+        if (!model) {
+            continue;
+        }
+        JaContactTarget target;
+        target.id = other->id();
+        target.parts = jaBodyParts(*model);
+        if (!target.parts.empty()) {
+            targets.push_back(std::move(target));
+        }
+    }
+    const auto &machine = _driver->machine();
+    bool hits = jaMoveHits(machine.moves().move(machine.move()));
+    for (auto &hit : _contacts.update(_moveSerial, hits, blades(), targets)) {
+        auto target = _game.getObjectById<Creature>(hit.target);
+        if (target && !target->isDead()) {
+            strike(*creature, *target, hit);
+        }
+    }
+}
+
+void JaSaber::setEngage(bool engage) {
+    _engage = engage;
+    _engaged = 0;
+    _scripted.reset();
+}
+
+void JaSaber::engage(const Creature &creature) {
+    auto module = _game.module();
+    std::shared_ptr<Creature> nearest;
+    float nearestDistance = std::numeric_limits<float>::max();
+    for (auto &object : module->area()->getObjectsByType(ObjectType::Creature)) {
+        auto other = std::static_pointer_cast<Creature>(object);
+        if (other.get() == &creature || other->isDead() || !module->isHostileToPartyLeader(*other)) {
+            continue;
+        }
+        float distance = glm::distance(glm::vec2(other->position()), glm::vec2(creature.position()));
+        if (distance < nearestDistance) {
+            nearest = other;
+            nearestDistance = distance;
+        }
+    }
+    JaSaberInput held;
+    if (nearest) {
+        // Facing f looks along (-sin f, cos f), as update() moves the character.
+        glm::vec2 toward(glm::vec2(nearest->position()) - glm::vec2(creature.position()));
+        auto camera = thirdPersonCamera();
+        if (camera) {
+            camera->setFacing(glm::mod(std::atan2(-toward.x, toward.y), glm::two_pi<float>()));
+        }
+        held.forward = 1;
+        if (nearestDistance <= kEngageRange) {
+            held.attack = true;
+            held.right = 1;
+        }
+        if (nearest->id() != _engaged) {
+            _engaged = nearest->id();
+            info(str(boost::format("jasaber: engaging %s, %.2f m away, at %.3f s") % nearest->tag() % nearestDistance % _modeTime));
+        }
+    } else if (_engaged) {
+        _engaged = 0;
+        info(str(boost::format("jasaber: no enemy left to engage, at %.3f s") % _modeTime));
+    }
+    _scripted = held;
+}
+
+void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit) {
+    // By the user's rule: one that can't block a lightsaber dies to the hit,
+    // given its hit points on top of the hit's own damage; one that can
+    // takes the hit's damage, with no attack roll either way.
+    bool canBlock = jaCanBlockSaber(target);
+    auto weapon = attacker.getEquippedItem(InventorySlots::rightWeapon);
+    AttackBuffer attack;
+    attack.addContactHit(attacker, target, weapon.get(), jaSaberHitExtraDamage(target));
+    attack.resolve(attacker, target);
+    attack.signal(_game, _services, attacker, target);
+    ++_hitCount;
+    info(str(boost::format("jasaber: hit %s (%s, %s) in %s at %.3f s: %d hit points left%s") %
+             target.tag() % jaBodyRegionName(hit.region) % (canBlock ? "can block" : "can't block") %
+             moveName() % _modeTime % target.currentHitPoints() % (target.isDead() ? ", dead" : "")));
+}
+
 std::string JaSaber::whyNotInPlay(const std::shared_ptr<Creature> &creature) const {
     if (!creature) {
         return "the character is gone";
@@ -517,10 +637,14 @@ bool JaSaber::update(float dt) {
         return false;
     }
     _modeTime += dt;
+    if (_engage) {
+        engage(*creature);
+    }
     JaSaberInput in(input());
     bool walk = walking();
     float speed = walk ? creature->walkSpeed() : creature->runSpeed();
     auto step = _driver->step(dt, in, walk, speed);
+    _moveSerial += static_cast<int>(step.started.size());
     const auto &moves = _driver->machine().moves();
     for (int id : step.started) {
         info(str(boost::format("jasaber: %s (%s) at %.3f s") % moves.move(id).name % moves.move(id).clip % _modeTime));
@@ -542,6 +666,8 @@ bool JaSaber::update(float dt) {
     }
     creature->setFacing(view + _driver->legsYaw());
     showPose();
+    // Where the character now stands, with the pose it now shows.
+    updateContacts(creature);
     // After the move, so the camera sees where the character is now.
     updateCamera(dt);
     return true;

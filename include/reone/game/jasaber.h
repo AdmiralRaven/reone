@@ -21,6 +21,7 @@
 
 #include "jaanimator.h"
 #include "jacamera.h"
+#include "jacontact.h"
 #include "jasabermoves.h"
 
 namespace reone {
@@ -38,6 +39,7 @@ class Game;
 class IConsole;
 class Module;
 class ThirdPersonCamera;
+struct ServicesView;
 
 /** Jedi Academy's animations from the player's own files, and the KOTOR bodies they pose. */
 class JaLibrary : boost::noncopyable {
@@ -110,8 +112,12 @@ private:
  *   which only pause it; and with a new area, another party leader or the
  *   character's death.
  *
- * Jedi Academy's blades pass through everything here: hits, blocking and
- * damage are not part of saber mode yet.
+ * The blade hits the hostile creatures it touches during an attack or a spin
+ * (JaSaberContacts), once a move, through KOTOR's own damage: a creature
+ * that can't block a lightsaber (jaCanBlockSaber) dies to the hit, and one
+ * that can takes the weapon's damage for an ordinary hit, with no attack
+ * roll. Blocking, deflection and enemies' real-time attacks are not part of
+ * saber mode yet.
  */
 class JaSaber : boost::noncopyable {
 public:
@@ -129,8 +135,12 @@ public:
     static constexpr float kMinZoom = 0.5f;
     static constexpr float kMaxZoom = 2.0f;
 
-    JaSaber(Game &game, IConsole &console) :
+    /** How far from the character, in metres, a creature is looked at for hits. */
+    static constexpr float kHitReach = 4.0f;
+
+    JaSaber(Game &game, ServicesView &services, IConsole &console) :
         _game(game),
+        _services(services),
         _console(console) {
     }
 
@@ -181,9 +191,25 @@ public:
 
     /**
      * Scripted input for unattended runs: what the player holds, in place of
-     * the keyboard and mouse, until set to nothing.
+     * the keyboard and mouse, until set to nothing. It ends engaging.
      */
-    void setScriptedInput(std::optional<JaSaberInput> input) { _scripted = std::move(input); }
+    void setScriptedInput(std::optional<JaSaberInput> input) {
+        _scripted = std::move(input);
+        _engage = false;
+    }
+
+    /** How near, in metres, engaging comes before it swings. */
+    static constexpr float kEngageRange = 1.1f;
+
+    /**
+     * For unattended runs: every tick, the camera, and so the character,
+     * turns to the nearest living hostile creature; the character runs at it
+     * until within kEngageRange, then holds the attack forward and right,
+     * chaining swings, until none is left. Off ends it and lets go of the
+     * input.
+     */
+    void setEngage(bool engage);
+    bool engaging() const { return _engage; }
 
     /** Turns the camera, and so the character, by \p radians, positive to the left. */
     void turn(float radians);
@@ -226,6 +252,12 @@ public:
     /** The move playing, by OpenJK's name; empty when saber mode is off. */
     std::string moveName() const;
 
+    /** The blades as the pose shown holds them, in world space; none while saber mode is off. */
+    std::vector<JaBlade> blades() const;
+
+    /** How many hits the blade has made since saber mode last started. */
+    int hitCount() const { return _hitCount; }
+
 private:
     struct Keys {
         bool forward {false};
@@ -240,6 +272,7 @@ private:
     };
 
     Game &_game;
+    ServicesView &_services;
     IConsole &_console;
     JaLibrary _library;
 
@@ -260,12 +293,24 @@ private:
     float _zoom {1.0f};
     std::optional<JaCamera> _view;
 
+    JaSaberContacts _contacts;
+    int _moveSerial {0}; /**< counts the moves started, so each move hits a creature once */
+    int _hitCount {0};
+    bool _engage {false};
+    uint32_t _engaged {0}; /**< the creature engaging goes for */
+
     JaSaberInput input() const;
     bool walking() const;
     bool handleKey(const input::KeyEvent &event);
     /** Why saber mode must end; empty when it can go on, in play or paused by a menu. */
     std::string whyNotInPlay(const std::shared_ptr<Creature> &creature) const;
     void showPose();
+    /** Finds what the blades hit this tick, and hits it. */
+    void updateContacts(const std::shared_ptr<Creature> &creature);
+    /** Turns to the nearest enemy and sets the input to go for it, for setEngage. */
+    void engage(const Creature &creature);
+    /** Applies one of the blade's hits on \p target. */
+    void strike(Creature &attacker, Creature &target, const JaSaberHit &hit);
     /** Moves saber mode's camera on by \p dt and shows its view. */
     void updateCamera(float dt);
     /** The third-person camera of the area saber mode started in. */

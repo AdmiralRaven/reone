@@ -46,6 +46,9 @@ class Item;
  * - jasabermode [on|off]: start or end saber mode (see JaSaber), as X does;
  * - jainput [attack] [forward|back] [left|right], or jainput off: hold that
  *   input in saber mode in place of the keyboard and mouse, for scripted runs;
+ * - jaengage [on|off]: in saber mode, turn to the nearest living enemy, run
+ *   at it and swing at it until none is left, for scripted runs (see
+ *   JaSaber::setEngage);
  * - jaturn <degrees>: turn the camera, and in saber mode the character, to
  *   the left;
  * - jamouse [radians]: show or set how far saber mode turns per unit of

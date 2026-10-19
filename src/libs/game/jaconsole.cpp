@@ -68,6 +68,7 @@ public:
     void list(const ConsoleArgs &args);
     void saberMode(const ConsoleArgs &args);
     void input(const ConsoleArgs &args);
+    void engage(const ConsoleArgs &args);
     void turn(const ConsoleArgs &args);
     void mouse(const ConsoleArgs &args);
     void look(const ConsoleArgs &args);
@@ -393,6 +394,17 @@ void JaConsole::input(const ConsoleArgs &args) {
     print("jainput: holding " + (held.empty() ? std::string("nothing") : boost::join(held, " ")));
 }
 
+void JaConsole::engage(const ConsoleArgs &args) {
+    bool on = true;
+    if (args.size() == 2 && boost::iequals(std::string(*args[1]), "off")) {
+        on = false;
+    } else if (args.size() > 2 || (args.size() == 2 && !boost::iequals(std::string(*args[1]), "on"))) {
+        throw std::runtime_error("Usage: jaengage [on|off]");
+    }
+    saberControl().setEngage(on);
+    print(on ? "jaengage: going for the nearest enemy" : "jaengage: off, the keyboard and mouse again");
+}
+
 void JaConsole::turn(const ConsoleArgs &args) {
     auto degrees = args.get<float>(1);
     if (args.size() != 2 || !degrees) {
@@ -691,6 +703,8 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jasabermode", &JaConsole::saberMode));
     console.registerCommand("jainput", "hold saber mode input for scripted runs: jainput [attack] [forward|back] [left|right], or jainput off",
                             logged("jainput", &JaConsole::input));
+    console.registerCommand("jaengage", "in saber mode, go for the nearest living enemy and swing at it, for scripted runs: jaengage [on|off]",
+                            logged("jaengage", &JaConsole::engage));
     console.registerCommand("jaturn", "turn the camera, and in saber mode the character, to the left: jaturn <degrees>",
                             logged("jaturn", &JaConsole::turn));
     console.registerCommand("jamouse", "show or set saber mode's mouse turn: jamouse [radians per unit]",

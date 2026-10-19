@@ -127,6 +127,15 @@ public:
                             FeatType feat = FeatType::Invalid);
 
     /**
+     * A weapon hit that is already decided, as a blade's contact decides it
+     * in saber mode: no attack roll, and the damage of an ordinary successful
+     * hit with \p weapon, or unarmed without one, plus \p extraDamage. It
+     * gives no attack-roll feedback, as there is no roll to report.
+     */
+    void addContactHit(const Creature &attacker, const Object &target,
+                       const Item *weapon, int extraDamage = 0);
+
+    /**
      * Apply the once-per-action effects of a melee combat feat.
      */
     void resolveMeleeSpecialAttack(
@@ -186,6 +195,7 @@ private:
         AttackBonusBreakdown attackBonusBreakdown;
         int defense;
         bool assuredHit;
+        bool contact {false}; /**< decided by a contact, not rolled */
         bool stunTarget {false};
         int impactTimeMilliseconds {0};
         bool meleeSignaled {false};

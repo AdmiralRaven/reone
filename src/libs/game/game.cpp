@@ -4000,7 +4000,7 @@ void Game::setRelativeMouseMode(bool relative) {
 
 JaSaber &Game::jaSaber() {
     if (!_jaSaber) {
-        _jaSaber = std::make_shared<JaSaber>(*this, _console);
+        _jaSaber = std::make_shared<JaSaber>(*this, _services, _console);
     }
     return *_jaSaber;
 }
