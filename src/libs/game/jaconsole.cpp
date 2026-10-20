@@ -703,7 +703,7 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jasabermode", &JaConsole::saberMode));
     console.registerCommand("jainput", "hold saber mode input for scripted runs: jainput [attack] [forward|back] [left|right], or jainput off",
                             logged("jainput", &JaConsole::input));
-    console.registerCommand("jaengage", "in saber mode, go for the nearest living enemy and swing at it, for scripted runs: jaengage [on|off]",
+    console.registerCommand("jaengage", "in saber mode, go for the nearest living enemy in sight and swing at it, for scripted runs: jaengage [on|off]",
                             logged("jaengage", &JaConsole::engage));
     console.registerCommand("jaturn", "turn the camera, and in saber mode the character, to the left: jaturn <degrees>",
                             logged("jaturn", &JaConsole::turn));

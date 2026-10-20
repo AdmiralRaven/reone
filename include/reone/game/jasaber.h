@@ -205,10 +205,10 @@ public:
 
     /**
      * For unattended runs: every tick, the camera, and so the character,
-     * turns to the nearest living hostile creature; the character runs at it
-     * until within kEngageRange, then holds the attack forward and right,
-     * chaining swings, until none is left. Off ends it and lets go of the
-     * input.
+     * turns to the nearest living hostile creature the character sees, as
+     * jafight's click finds one; the character runs at it until within
+     * kEngageRange, then holds the attack forward and right, chaining swings,
+     * until none is left in sight. Off ends it and lets go of the input.
      */
     void setEngage(bool engage);
     bool engaging() const { return _engage; }
@@ -316,11 +316,13 @@ private:
     /** Turns to the nearest enemy and sets the input to go for it, for setEngage. */
     void engage(const Creature &creature);
     /**
-     * Drops an attack of KOTOR's own from \p creature's actions, as a combat
-     * round queues one for the party leader when its target falls, so that it
-     * and the blade can't both hit.
+     * Drops the attacks of KOTOR's own from \p creature's actions, so that
+     * they and the blade can't both hit: one a combat round queues for the
+     * party leader when it ends, and one whose swing has begun, which locks
+     * its action against an ordinary clear and is cancelled by force, its
+     * blow discarded. Returns whether it dropped any.
      */
-    void dropKotorAttacks(Creature &creature);
+    bool dropKotorAttacks(Creature &creature);
     /** Applies one of the blade's hits on \p target. */
     void strike(Creature &attacker, Creature &target, const JaSaberHit &hit);
     /** Moves saber mode's camera on by \p dt and shows its view. */

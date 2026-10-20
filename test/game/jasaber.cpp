@@ -620,6 +620,34 @@ TEST_F(JaSaberMode, should_drop_an_attack_of_kotors_own_so_that_only_the_blade_h
     EXPECT_TRUE(leader->actions().empty());
 }
 
+TEST_F(JaSaberMode, should_drop_a_kotor_swing_already_begun_in_saber_mode_and_as_it_starts) {
+    // given: an attack of KOTOR's own whose swing has begun, which locks its
+    // action against an ordinary clear
+    auto other = game.newCreature();
+    game.module()->area()->add(other);
+    auto swing = game.newAction<AttackObjectAction>(other);
+    swing->lock();
+    leader->addAction(swing);
+
+    // when: a tick of saber mode
+    play(1.0f / 60.0f);
+
+    // then: it is cancelled, its blow with it, and gone
+    EXPECT_TRUE(swing->isCancelled());
+    EXPECT_TRUE(leader->actions().empty());
+
+    // and when saber mode starts during such a swing
+    game.jaSaber().leave();
+    auto another = game.newAction<AttackObjectAction>(other);
+    another->lock();
+    leader->addAction(another);
+    game.jaSaber().enter();
+
+    // then: the swing is dropped as saber mode takes the character over
+    EXPECT_TRUE(another->isCancelled());
+    EXPECT_TRUE(leader->actions().empty());
+}
+
 namespace {
 
 // Saber mode with creatures standing round for its blade to hit, which are
@@ -715,9 +743,10 @@ TEST_F(JaSaberHits, should_hit_nothing_while_the_leader_stands_ready) {
 
 TEST_F(JaSaberHits, should_turn_to_the_nearest_enemy_and_swing_until_none_is_left_when_engaging) {
     // given: an enemy 1 m to the right, within reach, and a friendly creature
-    // nearer, to the left
+    // nearer, to the left, both in the leader's sight
     auto enemy = addCreature("enemy", glm::vec2(1.0f, 0.0f), 5.0f, true);
     auto friendly = addCreature("friendly", glm::vec2(-0.5f, 0.0f), 1.0f, false);
+    TestGameModule::updatePerception(*game.module()->area());
 
     // when
     game.jaSaber().setEngage(true);
@@ -735,4 +764,28 @@ TEST_F(JaSaberHits, should_turn_to_the_nearest_enemy_and_swing_until_none_is_lef
     EXPECT_EQ(1, game.jaSaber().hitCount());
     EXPECT_EQ(20, friendly->currentHitPoints());
     EXPECT_TRUE(game.jaSaber().engaging());
+}
+
+TEST_F(JaSaberHits, should_engage_only_an_enemy_the_character_sees) {
+    // given: an enemy 30 m to the right, past the leader's sight of 20 m
+    auto enemy = addCreature("enemy", glm::vec2(30.0f, 0.0f), 1.0f, true);
+    TestGameModule::updatePerception(*game.module()->area());
+    float facing = thirdPersonCamera().facing();
+
+    // when
+    game.jaSaber().setEngage(true);
+    play(0.5f);
+
+    // then: engaging leaves it alone: no turn, no run, no swing
+    EXPECT_FLOAT_EQ(facing, thirdPersonCamera().facing());
+    EXPECT_NEAR(0.0f, glm::length(glm::vec2(leader->position())), 1e-4f);
+    EXPECT_EQ("LS_READY", game.jaSaber().moveName());
+
+    // and when it comes within sight, 5 m to the left
+    enemy->setPosition(glm::vec3(-5.0f, 0.0f, 0.0f));
+    TestGameModule::updatePerception(*game.module()->area());
+    play(1.0f / 60.0f);
+
+    // then: engaging turns to it: facing f looks along (-sin f, cos f)
+    EXPECT_NEAR(0.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
 }

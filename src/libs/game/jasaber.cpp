@@ -215,6 +215,9 @@ void JaSaber::enter() {
     module->player().stopMovement();
     camera->stopMovement();
     leader->clearAllActions();
+    if (dropKotorAttacks(*leader)) {
+        info("jasaber: dropped KOTOR's own attack, its swing begun, as saber mode started");
+    }
     camera->setFacing(leader->getFacing());
     driver->start(jaCurrentPose(*body.retargeter, *model));
 
@@ -546,11 +549,15 @@ void JaSaber::setEngage(bool engage) {
 
 void JaSaber::engage(const Creature &creature) {
     auto module = _game.module();
+    auto area = module->area();
     std::shared_ptr<Creature> nearest;
     float nearestDistance = std::numeric_limits<float>::max();
-    for (auto &object : module->area()->getObjectsByType(ObjectType::Creature)) {
+    for (auto &object : area->getObjectsByType(ObjectType::Creature)) {
         auto other = std::static_pointer_cast<Creature>(object);
-        if (other.get() == &creature || other->isDead() || !module->isHostileToPartyLeader(*other)) {
+        // As jafight finds one: an enemy the character sees, by its own
+        // perception and in a line of sight, not one elsewhere in the area.
+        if (other.get() == &creature || other->isDead() || !module->isHostileToPartyLeader(*other) ||
+            !creature.perception().sees(other->id()) || !area->isObjectSeen(creature, *other)) {
             continue;
         }
         float distance = glm::distance(glm::vec2(other->position()), glm::vec2(creature.position()));
@@ -578,19 +585,29 @@ void JaSaber::engage(const Creature &creature) {
         }
     } else if (_engaged) {
         _engaged = 0;
-        info(str(boost::format("jasaber: no enemy left to engage, at %.3f s") % _modeTime));
+        info(str(boost::format("jasaber: no enemy left in sight to engage, at %.3f s") % _modeTime));
     }
     _scripted = held;
 }
 
-void JaSaber::dropKotorAttacks(Creature &creature) {
-    for (auto &action : creature.actions()) {
-        if (action && action->type() == ActionType::AttackObject) {
-            creature.clearAllActions();
-            info(str(boost::format("jasaber: dropped KOTOR's own attack at %.3f s; in saber mode the blade attacks") % _modeTime));
-            return;
-        }
+bool JaSaber::dropKotorAttacks(Creature &creature) {
+    auto attacking = [&creature]() {
+        const auto &actions = creature.actions();
+        return std::any_of(actions.begin(), actions.end(), [](const std::shared_ptr<Action> &action) {
+            return action && action->type() == ActionType::AttackObject;
+        });
+    };
+    if (!attacking()) {
+        return false;
     }
+    // An ordinary clear leaves alone what can't stop now, as a medpac's cast
+    // mid-way; a swing already begun is one, so it goes by force, which
+    // discards its blow (AttackObjectAction::cancel).
+    creature.clearAllActions();
+    if (attacking()) {
+        creature.clearAllActions(true);
+    }
+    return true;
 }
 
 void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit) {
@@ -654,7 +671,9 @@ bool JaSaber::update(float dt) {
         return false;
     }
     _modeTime += dt;
-    dropKotorAttacks(*creature);
+    if (dropKotorAttacks(*creature)) {
+        info(str(boost::format("jasaber: dropped KOTOR's own attack at %.3f s; in saber mode the blade attacks") % _modeTime));
+    }
     if (_engage) {
         engage(*creature);
     }
