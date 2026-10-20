@@ -38,6 +38,7 @@ class SceneNode;
 namespace game {
 
 class Creature;
+class Item;
 
 /*
  * Saber mode's blade contacts, after Jedi Academy single-player's
@@ -163,13 +164,38 @@ JaBlade jaTransformBlade(const glm::mat4 &transform, const JaBlade &blade);
 bool jaMoveHits(const JaSaberMove &move);
 
 /**
- * Whether \p creature could block a lightsaber, by the user's rule
- * (2026-10-19): it holds a melee weapon, lightsabers and vibroblades among
- * them, or has an energy shield up. One that can't dies to a saber's hit;
- * one that can takes KOTOR's damage for the hit, its hit points standing in
- * for stamina.
+ * Whether \p item stands up to a lightsaber, by the user's rule (2026-10-19:
+ * "a vibroblade, a lightsaber, or the glowy shield things"; 2026-10-20:
+ * stun batons and staffs are cut through): KOTOR's vibro weapons, rows 3, 5
+ * and 7 of baseitems.2da (the vibrosword, the vibroblade and the vibro
+ * double-blade), and its lightsabers, rows 8 to 10, as Item::isLightsaber has
+ * them. A lightsaber cuts through every other weapon: the quarterstaff, the
+ * stun baton, the plain swords, the gaffi stick, the Wookiee warblade and the
+ * Gamorrean battleaxe.
+ */
+bool jaWeaponBlocksSaber(const Item &item);
+
+/**
+ * Whether \p creature could block a lightsaber, by the user's rule: it holds
+ * a weapon that stands up to one (jaWeaponBlocksSaber) in either hand, or has
+ * an energy shield up. One that can't dies to a saber's hit; one that can
+ * takes KOTOR's damage for the hit, its hit points standing in for stamina.
  */
 bool jaCanBlockSaber(const Creature &creature);
+
+/**
+ * Whether the blade passes through \p creature though KOTOR's factions make
+ * it hostile to the party leader: it is of one of KOTOR's two friendly
+ * standard factions, friendly_1 or friendly_2. KOTOR's own repute.2da makes
+ * those two enemies of each other, for staged scenes such as the Endar
+ * Spire's, where Sith in friendly_1 fight Republic soldiers in friendly_2.
+ * By the user's rule (2026-10-20), the blade must not kill a Republic
+ * soldier, nor anyone outside a fight; those KOTOR's factions don't make
+ * hostile it never hits. KOTOR also puts in friendly_2 the Sith of two
+ * staged fights on the Endar Spire, its Sith apprentice and Darth Bandon,
+ * whom the blade would pass through too.
+ */
+bool jaSparedBySaber(const Creature &creature);
 
 /**
  * What a saber's hit on \p target adds to the weapon's damage, by the same

@@ -48,7 +48,8 @@ class Item;
  *   input in saber mode in place of the keyboard and mouse, for scripted runs;
  * - jaengage [on|off]: in saber mode, turn to the nearest living enemy the
  *   party leader sees, run at it and swing at it until none is left in
- *   sight, for scripted runs (see JaSaber::setEngage);
+ *   sight, for scripted runs (see JaSaber::setEngage); off logs the enemies
+ *   then left in sight (JaSaber::enemiesInSight), or none;
  * - jaturn <degrees>: turn the camera, and in saber mode the character, to
  *   the left;
  * - jamouse [radians]: show or set how far saber mode turns per unit of
@@ -57,6 +58,9 @@ class Item;
  * And, for scripted checks of KOTOR's own play:
  *
  * - jastatus <label> [item tag]: log jaLeaderStatus for the party leader;
+ * - jacreature <tag>: log whether each creature with the tag in the area is
+ *   alive or dead, its hit points and how far it is from the party leader,
+ *   or that none has the tag;
  * - jafight: attack the nearest living enemy the party leader sees, as a
  *   click on it does, unless the leader is attacking a living enemy already;
  * - jause <item tag>: use a healing item on the party leader, as

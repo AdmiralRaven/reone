@@ -424,14 +424,29 @@ bool jaMoveHits(const JaSaberMove &move) {
     }
 }
 
+bool jaWeaponBlocksSaber(const Item &item) {
+    switch (item.baseItemType()) {
+    case 3: // vibrosword
+    case 5: // vibroblade
+    case 7: // vibro double-blade
+        return true;
+    default:
+        return item.isLightsaber();
+    }
+}
+
 bool jaCanBlockSaber(const Creature &creature) {
     for (int slot : {InventorySlots::rightWeapon, InventorySlots::leftWeapon}) {
         auto item = creature.getEquippedItem(slot);
-        if (item && item->weaponType() == WeaponType::Melee) {
+        if (item && jaWeaponBlocksSaber(*item)) {
             return true;
         }
     }
     return creature.hasEffect(EffectType::ForceShield);
+}
+
+bool jaSparedBySaber(const Creature &creature) {
+    return creature.faction() == Faction::Friendly1 || creature.faction() == Faction::Friendly2;
 }
 
 int jaSaberHitExtraDamage(const Creature &target) {

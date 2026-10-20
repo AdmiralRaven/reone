@@ -26,6 +26,7 @@
 #include "reone/game/camerastyle.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/dialog.h"
+#include "reone/game/jaconsole.h"
 #include "reone/game/jasaber.h"
 #include "reone/game/object/area.h"
 #include "reone/game/object/camera/thirdperson.h"
@@ -673,10 +674,13 @@ protected:
     }
 
     // A creature with 20 hit points at \p at, \p width across: a box body,
-    // one upright capsule half as round, 3 m tall.
-    std::shared_ptr<Creature> addCreature(const std::string &tag, const glm::vec2 &at, float width, bool isHostile) {
+    // one upright capsule half as round, 3 m tall. It is of \p faction, or
+    // else hostile_1 when hostile and neutral when not.
+    std::shared_ptr<Creature> addCreature(const std::string &tag, const glm::vec2 &at, float width, bool isHostile,
+                                          std::optional<Faction> faction = std::nullopt) {
         auto creature = game.newCreature();
         creature->setTag(tag);
+        creature->setFaction(faction.value_or(isHostile ? Faction::Hostile1 : Faction::Neutral));
         creature->setMaxHitPoints(20);
         creature->setCurrentHitPoints(20);
         bodies.push_back(syntheticBoxBody(width, 3.0f));
@@ -788,4 +792,118 @@ TEST_F(JaSaberHits, should_engage_only_an_enemy_the_character_sees) {
 
     // then: engaging turns to it: facing f looks along (-sin f, cos f)
     EXPECT_NEAR(0.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
+}
+
+TEST_F(JaSaberHits, should_pass_through_a_republic_soldier_kotors_factions_make_hostile) {
+    // given: in the same place, a Sith soldier of hostile_1, and a Republic
+    // soldier of friendly_2, whom KOTOR's factions make hostile to the party
+    // leader, of friendly_1, as on the Endar Spire past its first locked door
+    auto sith = addCreature("end_sith3", glm::vec2(0.0f, 0.3f), 5.0f, true);
+    auto soldier = addCreature("end_soldier2", glm::vec2(0.0f, 0.3f), 5.0f, true, Faction::Friendly2);
+
+    // when: the leader swings
+    JaSaberInput attack;
+    attack.attack = true;
+    game.jaSaber().setScriptedInput(attack);
+    play(1.5f);
+    game.jaSaber().setScriptedInput(std::nullopt);
+
+    // then: the blade killed the Sith, and passed through the soldier
+    EXPECT_TRUE(sith->isDead());
+    EXPECT_EQ(1, game.jaSaber().hitCount());
+    EXPECT_EQ(20, soldier->currentHitPoints());
+}
+
+TEST_F(JaSaberHits, should_not_engage_a_republic_soldier_kotors_factions_make_hostile) {
+    // given: such a soldier 1 m to the left, and a Sith farther, 3 m to the
+    // right, both in the leader's sight
+    auto soldier = addCreature("end_soldier2", glm::vec2(-1.0f, 0.0f), 1.0f, true, Faction::Friendly2);
+    auto sith = addCreature("end_sith3", glm::vec2(3.0f, 0.0f), 1.0f, true);
+    TestGameModule::updatePerception(*game.module()->area());
+
+    // when
+    game.jaSaber().setEngage(true);
+    play(1.0f / 60.0f);
+
+    // then: engaging turns to the Sith, past the nearer soldier: facing f
+    // looks along (-sin f, cos f)
+    EXPECT_NEAR(1.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
+}
+
+TEST_F(JaSaberHits, should_report_the_enemies_left_in_sight_as_engaging_ends) {
+    // given: the console's commands; a Sith 1 m to the right, in reach and
+    // in sight, a Republic soldier of friendly_2 2 m to the left, in sight,
+    // and a Sith 30 m away, past the leader's sight of 20 m
+    registerJaConsoleCommands(game, console);
+    auto sith = addCreature("end_sith3", glm::vec2(1.0f, 0.0f), 5.0f, true);
+    addCreature("end_soldier2", glm::vec2(-2.0f, 0.0f), 1.0f, true, Faction::Friendly2);
+    addCreature("end_sith2", glm::vec2(0.0f, 30.0f), 1.0f, true);
+    TestGameModule::updatePerception(*game.module()->area());
+
+    // when: engaging is turned off
+    console.execute("jaengage", {"off"});
+
+    // then: it names the one enemy the blade may hit in sight
+    EXPECT_EQ("jaengage: off, the keyboard and mouse again; enemies in sight: end_sith3 1.00 m", console.lines.back());
+
+    // and when engaging has killed it
+    console.execute("jaengage", {"on"});
+    play(2.0f);
+    ASSERT_TRUE(sith->isDead());
+    console.execute("jaengage", {"off"});
+
+    // then: none is left in sight, though one lives out of sight
+    EXPECT_EQ("jaengage: off, the keyboard and mouse again; enemies in sight: none", console.lines.back());
+
+    // and jacreature tells the dead from the living by tag, whatever its case
+    console.execute("jacreature", {"end_sith3"});
+    EXPECT_EQ(0u, console.lines.back().find("jacreature: end_sith3 dead, hit points ")) << console.lines.back();
+    console.execute("jacreature", {"END_SITH2"});
+    EXPECT_EQ(0u, console.lines.back().find("jacreature: end_sith2 alive, hit points 20 of 20, ")) << console.lines.back();
+    EXPECT_NE(std::string::npos, console.lines.back().find(" m from the party leader")) << console.lines.back();
+    console.execute("jacreature", {"end_sith9"});
+    EXPECT_EQ("jacreature: no creature tagged end_sith9 in the area", console.lines.back());
+}
+
+TEST_F(JaSaberHits, should_list_the_enemies_in_sight_nearest_first) {
+    // given: three enemies in sight, 3 m, 1 m and 2 m away; and, not to be
+    // listed, one that isn't hostile, a Republic soldier of friendly_2, one
+    // 30 m away, past the leader's sight, and one that died since the
+    // leader's perception last looked, as the blade's kills do
+    addCreature("sith_3m", glm::vec2(0.0f, 3.0f), 0.5f, true);
+    addCreature("sith_1m", glm::vec2(1.0f, 0.0f), 0.5f, true);
+    addCreature("sith_2m", glm::vec2(-2.0f, 0.0f), 0.5f, true);
+    auto dead = addCreature("dead", glm::vec2(0.0f, -1.5f), 0.5f, true);
+    addCreature("neutral", glm::vec2(0.0f, -2.5f), 0.5f, false);
+    addCreature("end_soldier2", glm::vec2(1.5f, 1.5f), 0.5f, true, Faction::Friendly2);
+    addCreature("out_of_sight", glm::vec2(0.0f, 30.0f), 0.5f, true);
+    TestGameModule::updatePerception(*game.module()->area());
+    ASSERT_TRUE(leader->perception().sees(dead->id()));
+    dead->damage(100, nullptr);
+    ASSERT_TRUE(dead->isDead());
+
+    // when
+    auto enemies = game.jaSaber().enemiesInSight(*leader);
+
+    // then
+    std::vector<std::string> tags;
+    for (auto &enemy : enemies) {
+        tags.push_back(enemy->tag());
+    }
+    EXPECT_EQ((std::vector<std::string> {"sith_1m", "sith_2m", "sith_3m"}), tags);
+}
+
+TEST_F(JaSaberHits, should_go_for_the_nearest_of_the_enemies_in_sight) {
+    // given: an enemy 1 m to the right and one 3 m to the left, both in sight
+    addCreature("near", glm::vec2(1.0f, 0.0f), 1.0f, true);
+    addCreature("far", glm::vec2(-3.0f, 0.0f), 1.0f, true);
+    TestGameModule::updatePerception(*game.module()->area());
+
+    // when
+    game.jaSaber().setEngage(true);
+    play(1.0f / 60.0f);
+
+    // then: engaging turns to the nearer, on the right: facing f looks along
+    // (-sin f, cos f)
+    EXPECT_NEAR(1.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
 }

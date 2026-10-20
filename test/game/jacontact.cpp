@@ -115,16 +115,27 @@ void expectNear(const glm::vec3 &expected, const glm::vec3 &actual) {
     EXPECT_NEAR(expected.z, actual.z, 1e-4f);
 }
 
-// KOTOR's base items as the tests need them: a lightsaber (2d8), a stun
-// baton and a blaster pistol, at their retail rows.
+// KOTOR's base items as the tests need them, at their retail rows: a
+// quarterstaff, a stun baton, a long sword, a vibrosword, a vibroblade, a
+// vibro double-blade, a lightsaber (2d8) and a blaster pistol.
 std::shared_ptr<TwoDA> weaponTable() {
     TwoDA::Builder builder;
     builder.columns({"maxattackrange", "crithitmult", "critthreat", "damageflags", "dietoroll",
                      "equipableslots", "itemclass", "numdice", "weapontype", "weaponwield",
                      "ammunitiontype", "bodyvar"});
     for (int i = 0; i <= 12; ++i) {
-        if (i == 1) {
+        if (i == 0) {
+            builder.row({"1.5", "2", "2", "1", "6", "48", "w_qtrstaff", "1", "1", "3", "-1", ""});
+        } else if (i == 1) {
             builder.row({"1.5", "2", "2", "2", "4", "48", "w_stunbaton", "1", "1", "1", "-1", ""});
+        } else if (i == 2) {
+            builder.row({"1.5", "2", "1", "4", "12", "48", "w_lngswrd", "1", "1", "2", "-1", ""});
+        } else if (i == 3) {
+            builder.row({"1.5", "2", "2", "4", "6", "48", "w_vbroswrd", "2", "1", "2", "-1", ""});
+        } else if (i == 5) {
+            builder.row({"1.5", "2", "2", "2", "10", "48", "w_vbroshort", "1", "1", "2", "-1", ""});
+        } else if (i == 7) {
+            builder.row({"1.5", "2", "1", "4", "8", "48", "w_vbrdblswd", "2", "1", "3", "-1", ""});
         } else if (i == 8) {
             builder.row({"1.5", "2", "2", "2", "8", "48", "w_lghtsbr", "2", "1", "2", "-1", ""});
         } else if (i == 12) {
@@ -147,8 +158,13 @@ std::shared_ptr<Item> weapon(Game &game, int baseItem) {
     return item;
 }
 
-constexpr int kLightsaber = 8;
+constexpr int kQuarterstaff = 0;
 constexpr int kStunBaton = 1;
+constexpr int kLongSword = 2;
+constexpr int kVibrosword = 3;
+constexpr int kVibroblade = 5;
+constexpr int kVibroDoubleBlade = 7;
+constexpr int kLightsaber = 8;
 constexpr int kBlasterPistol = 12;
 
 } // namespace
@@ -424,7 +440,7 @@ TEST(JaSaberContacts, should_hit_each_creature_it_reaches) {
 
 // Who can block, and the hit's damage
 
-TEST(JaSaberDamage, should_count_melee_weapons_and_energy_shields_as_blocking) {
+TEST(JaSaberDamage, should_count_vibroblades_lightsabers_and_energy_shields_as_blocking) {
     TestEngine &engine = testEngine();
     StubConsole console;
     Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
@@ -439,9 +455,26 @@ TEST(JaSaberDamage, should_count_melee_weapons_and_energy_shields_as_blocking) {
     ASSERT_TRUE(saber->equip(InventorySlots::rightWeapon, weapon(game, kLightsaber)));
     EXPECT_TRUE(jaCanBlockSaber(*saber));
 
-    auto baton = game.newCreature();
-    ASSERT_TRUE(baton->equip(InventorySlots::rightWeapon, weapon(game, kStunBaton)));
-    EXPECT_TRUE(jaCanBlockSaber(*baton));
+    for (int vibro : {kVibrosword, kVibroblade, kVibroDoubleBlade}) {
+        auto creature = game.newCreature();
+        ASSERT_TRUE(creature->equip(InventorySlots::rightWeapon, weapon(game, vibro)));
+        EXPECT_TRUE(jaCanBlockSaber(*creature)) << vibro;
+    }
+
+    // a lightsaber cuts through a stun baton or a staff (the user,
+    // 2026-10-20), and other weapons that aren't vibro weapons, by the
+    // words of the rule (2026-10-19)
+    for (int cut : {kStunBaton, kQuarterstaff, kLongSword}) {
+        auto creature = game.newCreature();
+        ASSERT_TRUE(creature->equip(InventorySlots::rightWeapon, weapon(game, cut)));
+        EXPECT_FALSE(jaCanBlockSaber(*creature)) << cut;
+    }
+
+    // either hand counts
+    auto leftHand = game.newCreature();
+    ASSERT_TRUE(leftHand->equip(InventorySlots::rightWeapon, weapon(game, kStunBaton)));
+    ASSERT_TRUE(leftHand->equip(InventorySlots::leftWeapon, weapon(game, kVibroblade)));
+    EXPECT_TRUE(jaCanBlockSaber(*leftHand));
 
     auto blaster = game.newCreature();
     ASSERT_TRUE(blaster->equip(InventorySlots::rightWeapon, weapon(game, kBlasterPistol)));
@@ -451,6 +484,18 @@ TEST(JaSaberDamage, should_count_melee_weapons_and_energy_shields_as_blocking) {
     ASSERT_TRUE(shielded->equip(InventorySlots::rightWeapon, weapon(game, kBlasterPistol)));
     shielded->applyEffect(game.newEffect<ForceShieldEffect>(0), DurationType::Temporary, 30.0f);
     EXPECT_TRUE(jaCanBlockSaber(*shielded));
+}
+
+TEST(JaSaberDamage, should_spare_kotors_friendly_factions_though_hostile) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto creature = game.newCreature();
+    for (auto [faction, spared] : std::vector<std::pair<Faction, bool>> {
+             {Faction::Friendly1, true}, {Faction::Friendly2, true}, {Faction::Hostile1, false}, {Faction::Hostile2, false}, {Faction::Neutral, false}, {Faction::Invalid, false}}) {
+        creature->setFaction(faction);
+        EXPECT_EQ(spared, jaSparedBySaber(*creature)) << static_cast<int>(faction);
+    }
 }
 
 TEST(JaSaberDamage, should_add_the_hit_points_of_a_creature_that_cant_block) {

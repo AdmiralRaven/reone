@@ -69,6 +69,7 @@ public:
     void saberMode(const ConsoleArgs &args);
     void input(const ConsoleArgs &args);
     void engage(const ConsoleArgs &args);
+    void creature(const ConsoleArgs &args);
     void turn(const ConsoleArgs &args);
     void mouse(const ConsoleArgs &args);
     void look(const ConsoleArgs &args);
@@ -402,7 +403,45 @@ void JaConsole::engage(const ConsoleArgs &args) {
         throw std::runtime_error("Usage: jaengage [on|off]");
     }
     saberControl().setEngage(on);
-    print(on ? "jaengage: going for the nearest enemy" : "jaengage: off, the keyboard and mouse again");
+    if (on) {
+        print("jaengage: going for the nearest enemy");
+        return;
+    }
+    // What engaging leaves, for a scripted run to judge its end by.
+    std::string line("jaengage: off, the keyboard and mouse again");
+    auto module = _game.module();
+    std::shared_ptr<Creature> leader = module && module->area() ? _game.party().getLeader() : nullptr;
+    if (leader) {
+        std::vector<std::string> enemies;
+        for (auto &enemy : saberControl().enemiesInSight(*leader)) {
+            float distance = glm::distance(glm::vec2(enemy->position()), glm::vec2(leader->position()));
+            enemies.push_back(str(boost::format("%s %.2f m") % enemy->tag() % distance));
+        }
+        line += "; enemies in sight: " + (enemies.empty() ? std::string("none") : boost::join(enemies, ", "));
+    }
+    print(line);
+}
+
+void JaConsole::creature(const ConsoleArgs &args) {
+    if (args.size() != 2) {
+        throw std::runtime_error("Usage: jacreature <tag>");
+    }
+    auto leader = partyLeader();
+    std::string tag(*args[1]);
+    int found = 0;
+    for (const std::shared_ptr<Object> &object : _game.module()->area()->getObjectsByType(ObjectType::Creature)) {
+        if (!boost::iequals(object->tag(), tag)) {
+            continue;
+        }
+        auto creature = std::static_pointer_cast<Creature>(object);
+        print(str(boost::format("jacreature: %s %s, hit points %d of %d, %.2f m from the party leader") %
+                  creature->tag() % (creature->isDead() ? "dead" : "alive") %
+                  creature->currentHitPoints() % creature->maxHitPoints() % leader->getDistanceTo(*creature)));
+        ++found;
+    }
+    if (found == 0) {
+        print("jacreature: no creature tagged " + tag + " in the area");
+    }
 }
 
 void JaConsole::turn(const ConsoleArgs &args) {
@@ -705,6 +744,8 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jainput", &JaConsole::input));
     console.registerCommand("jaengage", "in saber mode, go for the nearest living enemy in sight and swing at it, for scripted runs: jaengage [on|off]",
                             logged("jaengage", &JaConsole::engage));
+    console.registerCommand("jacreature", "log whether each creature with a tag in the area is alive, and its hit points: jacreature <tag>",
+                            logged("jacreature", &JaConsole::creature));
     console.registerCommand("jaturn", "turn the camera, and in saber mode the character, to the left: jaturn <degrees>",
                             logged("jaturn", &JaConsole::turn));
     console.registerCommand("jamouse", "show or set saber mode's mouse turn: jamouse [radians per unit]",

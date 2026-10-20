@@ -511,7 +511,7 @@ void JaSaber::updateContacts(const std::shared_ptr<Creature> &creature) {
     std::vector<JaContactTarget> targets;
     for (auto &object : area->getObjectsByType(ObjectType::Creature)) {
         auto other = std::static_pointer_cast<Creature>(object);
-        if (other == creature || other->isDead() || !module->isHostileToPartyLeader(*other) ||
+        if (other == creature || other->isDead() || !module->isHostileToPartyLeader(*other) || jaSparedBySaber(*other) ||
             glm::distance2(other->position(), creature->position()) > kHitReach * kHitReach) {
             continue;
         }
@@ -547,27 +547,38 @@ void JaSaber::setEngage(bool engage) {
     _scripted.reset();
 }
 
-void JaSaber::engage(const Creature &creature) {
+std::vector<std::shared_ptr<Creature>> JaSaber::enemiesInSight(const Creature &creature) const {
     auto module = _game.module();
+    if (!module || !module->area()) {
+        return {};
+    }
     auto area = module->area();
-    std::shared_ptr<Creature> nearest;
-    float nearestDistance = std::numeric_limits<float>::max();
+    std::vector<std::pair<float, std::shared_ptr<Creature>>> found;
     for (auto &object : area->getObjectsByType(ObjectType::Creature)) {
         auto other = std::static_pointer_cast<Creature>(object);
         // As jafight finds one: an enemy the character sees, by its own
         // perception and in a line of sight, not one elsewhere in the area.
-        if (other.get() == &creature || other->isDead() || !module->isHostileToPartyLeader(*other) ||
+        if (other.get() == &creature || other->isDead() || !module->isHostileToPartyLeader(*other) || jaSparedBySaber(*other) ||
             !creature.perception().sees(other->id()) || !area->isObjectSeen(creature, *other)) {
             continue;
         }
-        float distance = glm::distance(glm::vec2(other->position()), glm::vec2(creature.position()));
-        if (distance < nearestDistance) {
-            nearest = other;
-            nearestDistance = distance;
-        }
+        found.emplace_back(glm::distance(glm::vec2(other->position()), glm::vec2(creature.position())), other);
     }
+    // Of two as near, the one the area lists first.
+    std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    std::vector<std::shared_ptr<Creature>> enemies;
+    for (auto &[distance, other] : found) {
+        enemies.push_back(other);
+    }
+    return enemies;
+}
+
+void JaSaber::engage(const Creature &creature) {
+    auto enemies = enemiesInSight(creature);
     JaSaberInput held;
-    if (nearest) {
+    if (!enemies.empty()) {
+        const auto &nearest = enemies.front();
+        float nearestDistance = glm::distance(glm::vec2(nearest->position()), glm::vec2(creature.position()));
         // Facing f looks along (-sin f, cos f), as update() moves the character.
         glm::vec2 toward(glm::vec2(nearest->position()) - glm::vec2(creature.position()));
         auto camera = thirdPersonCamera();
@@ -585,7 +596,8 @@ void JaSaber::engage(const Creature &creature) {
         }
     } else if (_engaged) {
         _engaged = 0;
-        info(str(boost::format("jasaber: no enemy left in sight to engage, at %.3f s") % _modeTime));
+        // Whether any is left at all, out of sight, this can't tell.
+        info(str(boost::format("jasaber: no enemy in sight to engage, at %.3f s") % _modeTime));
     }
     _scripted = held;
 }

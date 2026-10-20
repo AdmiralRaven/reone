@@ -152,8 +152,8 @@ TEST(JaConsole, should_register_the_commands) {
 
     registerJaConsoleCommands(game, console);
 
-    for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist",
-                      "jastatus", "jafight", "jause", "jahitpoints"}) {
+    for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist", "jaengage",
+                      "jastatus", "jacreature", "jafight", "jause", "jahitpoints"}) {
         EXPECT_TRUE(console.hasCommand(name)) << name;
     }
 }
@@ -298,4 +298,11 @@ TEST(JaConsole, should_explain_what_is_missing) {
     EXPECT_NE(std::string::npos, failure(console, "jafight", {"end_sith2"}).find("Usage"));
     EXPECT_NE(std::string::npos, failure(console, "jause", {}).find("Usage"));
     EXPECT_NE(std::string::npos, failure(console, "jahitpoints", {}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jacreature", {"end_sith2"}).find("Load a game first"));
+    EXPECT_NE(std::string::npos, failure(console, "jacreature", {}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jacreature", {"end_sith2", "end_sith3"}).find("Usage"));
+
+    // Without a game, turning engaging off has no enemies to report.
+    console.execute("jaengage", {"off"});
+    EXPECT_EQ(std::string("jaengage: off, the keyboard and mouse again"), lastLine(console));
 }

@@ -115,7 +115,8 @@ private:
  * The saber stays lit in saber mode, as in Jedi Academy, through the end of
  * KOTOR's combat (Creature::setLightsabersOn). Its blade hits the hostile
  * creatures it touches during an attack or a spin (JaSaberContacts), once a
- * move, through KOTOR's own damage: a creature that can't block a lightsaber
+ * move, but never those of KOTOR's friendly factions (jaSparedBySaber),
+ * through KOTOR's own damage: a creature that can't block a lightsaber
  * (jaCanBlockSaber) dies to the hit, and one that can takes the weapon's
  * damage for an ordinary hit, with no attack roll. The blade is the
  * character's only attack: KOTOR's own are dropped. Blocking, deflection and
@@ -205,13 +206,21 @@ public:
 
     /**
      * For unattended runs: every tick, the camera, and so the character,
-     * turns to the nearest living hostile creature the character sees, as
-     * jafight's click finds one; the character runs at it until within
-     * kEngageRange, then holds the attack forward and right, chaining swings,
-     * until none is left in sight. Off ends it and lets go of the input.
+     * turns to the nearest of enemiesInSight(); the character runs at it
+     * until within kEngageRange, then holds the attack forward and right,
+     * chaining swings. When none is in sight it holds nothing, and goes for
+     * the next that comes into sight. Off ends it and lets go of the input.
      */
     void setEngage(bool engage);
     bool engaging() const { return _engage; }
+
+    /**
+     * The living enemies \p creature sees that the blade may hit, nearest
+     * first: hostile to the party leader but not of KOTOR's friendly factions
+     * (jaSparedBySaber), and seen by the creature's own perception and in a
+     * line of sight, as jafight finds them.
+     */
+    std::vector<std::shared_ptr<Creature>> enemiesInSight(const Creature &creature) const;
 
     /** Turns the camera, and so the character, by \p radians, positive to the left. */
     void turn(float radians);
