@@ -26,6 +26,7 @@
 #include "reone/graphics/mesh.h"
 #include "reone/graphics/model.h"
 #include "reone/graphics/modelnode.h"
+#include "reone/resource/2da.h"
 #include "reone/system/stream/memoryinput.h"
 
 #include "gla.h"
@@ -254,6 +255,19 @@ inline std::shared_ptr<Model> syntheticSaber(int planes = 1) {
 
 // A creature's model that is one box, \p width square and \p height tall,
 // standing on its origin: a body with no humanoid skeleton.
+// KOTOR's appearance.2da as far as Creature::loadAppearance reads it: one row
+// for each size category, small, medium, large and huge (rows 0 to 3), none
+// with a model to build.
+inline std::shared_ptr<resource::TwoDA> sizedAppearances() {
+    resource::TwoDA::Builder builder;
+    builder.columns({"modeltype", "walkdist", "rundist", "perspace", "creperspace",
+                     "sizecategory", "footsteptype", "envmap", "race"});
+    for (const char *size : {"2", "3", "4", "5"}) {
+        builder.row({"S", "1", "1", "0.6", "0.6", size, "-1", "", ""});
+    }
+    return builder.build();
+}
+
 inline std::shared_ptr<Model> syntheticBoxBody(float width, float height) {
     const glm::quat none(1.0f, 0.0f, 0.0f, 0.0f);
     auto root = std::make_shared<ModelNode>(0, "box_body", glm::vec3(0.0f), none, true);

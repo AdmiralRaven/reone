@@ -51,7 +51,7 @@ class Item;
  *   the body's parts;
  * - JA adds up damage for every pass a blade spends in a body; here a move
  *   hits a creature once, and the hit's damage follows the user's rule
- *   (jaCanBlockSaber).
+ *   (jaCanBlockSaber, jaTooBigToCut).
  */
 
 /** A blade at one moment, in world space. */
@@ -198,9 +198,20 @@ bool jaCanBlockSaber(const Creature &creature);
 bool jaSparedBySaber(const Creature &creature);
 
 /**
+ * Whether \p creature is too big for a lightsaber to cut down at one hit, by
+ * the user's answer of 2026-10-20: KOTOR's large and huge creatures, by
+ * appearance.2da's size category, such as the bantha, the rancor, the
+ * terentatek, the krayt dragon and the sea beast. A hit takes the weapon's
+ * damage off their hit points, a health bar, as for those that can block:
+ * not capped as Jedi Academy caps its rancor's (his choice).
+ */
+bool jaTooBigToCut(const Creature &creature);
+
+/**
  * What a saber's hit on \p target adds to the weapon's damage, by the same
- * rule: the target's hit points when it can't block, so the hit kills unless
- * its resistances or a story's protection stop it; none when it can.
+ * rule: the target's hit points when it can't block and isn't too big to
+ * cut, so the hit kills unless its resistances or a story's protection stop
+ * it; none otherwise.
  */
 int jaSaberHitExtraDamage(const Creature &target);
 

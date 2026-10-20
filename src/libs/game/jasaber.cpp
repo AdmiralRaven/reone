@@ -624,9 +624,15 @@ bool JaSaber::dropKotorAttacks(Creature &creature) {
 
 void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit) {
     // By the user's rule: one that can't block a lightsaber dies to the hit,
-    // given its hit points on top of the hit's own damage; one that can
-    // takes the hit's damage, with no attack roll either way.
-    bool canBlock = jaCanBlockSaber(target);
+    // given its hit points on top of the hit's own damage; one that can, or
+    // is too big to cut down, takes the hit's damage, with no attack roll
+    // either way.
+    const char *standing = "can't block";
+    if (jaCanBlockSaber(target)) {
+        standing = "can block";
+    } else if (jaTooBigToCut(target)) {
+        standing = "too big to cut";
+    }
     auto weapon = attacker.getEquippedItem(InventorySlots::rightWeapon);
     AttackBuffer attack;
     attack.addContactHit(attacker, target, weapon.get(), jaSaberHitExtraDamage(target));
@@ -634,7 +640,7 @@ void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit
     attack.signal(_game, _services, attacker, target);
     ++_hitCount;
     info(str(boost::format("jasaber: hit %s (%s, %s) in %s at %.3f s: %d hit points left%s") %
-             target.tag() % jaBodyRegionName(hit.region) % (canBlock ? "can block" : "can't block") %
+             target.tag() % jaBodyRegionName(hit.region) % standing %
              moveName() % _modeTime % target.currentHitPoints() % (target.isDead() ? ", dead" : "")));
 }
 

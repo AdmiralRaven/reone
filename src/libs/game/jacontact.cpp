@@ -449,8 +449,12 @@ bool jaSparedBySaber(const Creature &creature) {
     return creature.faction() == Faction::Friendly1 || creature.faction() == Faction::Friendly2;
 }
 
+bool jaTooBigToCut(const Creature &creature) {
+    return creature.size() >= CreatureSize::Large;
+}
+
 int jaSaberHitExtraDamage(const Creature &target) {
-    return jaCanBlockSaber(target) ? 0 : std::max(0, target.currentHitPoints());
+    return jaCanBlockSaber(target) || jaTooBigToCut(target) ? 0 : std::max(0, target.currentHitPoints());
 }
 
 void JaSaberContacts::reset() {

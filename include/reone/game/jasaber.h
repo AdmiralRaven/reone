@@ -117,8 +117,9 @@ private:
  * creatures it touches during an attack or a spin (JaSaberContacts), once a
  * move, but never those of KOTOR's friendly factions (jaSparedBySaber),
  * through KOTOR's own damage: a creature that can't block a lightsaber
- * (jaCanBlockSaber) dies to the hit, and one that can takes the weapon's
- * damage for an ordinary hit, with no attack roll. The blade is the
+ * (jaCanBlockSaber) dies to the hit, and one that can, or is too big to cut
+ * down (jaTooBigToCut), takes the weapon's damage for an ordinary hit, with
+ * no attack roll. The blade is the
  * character's only attack: KOTOR's own are dropped. Blocking, deflection and
  * enemies' real-time attacks are not part of saber mode yet.
  */

@@ -907,3 +907,35 @@ TEST_F(JaSaberHits, should_go_for_the_nearest_of_the_enemies_in_sight) {
     // (-sin f, cos f)
     EXPECT_NEAR(1.5f * glm::pi<float>(), thirdPersonCamera().facing(), 1e-4f);
 }
+
+TEST_F(JaSaberHits, should_wound_a_creature_too_big_to_cut_down_not_kill_it) {
+    // given: a hostile creature round the leader, with 20 hit points and no
+    // weapon, of a large row of KOTOR's appearance table, as a rancor is
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(sizedAppearances()));
+    auto big = addCreature("big", glm::vec2(0.0f, 0.3f), 5.0f, true);
+    big->setAppearance(2);
+    big->loadAppearance();
+    ASSERT_TRUE(jaTooBigToCut(*big));
+
+    // when: the leader swings
+    JaSaberInput attack;
+    attack.attack = true;
+    game.jaSaber().setScriptedInput(attack);
+    play(1.5f);
+    game.jaSaber().setScriptedInput(std::nullopt);
+
+    // then: the blade hit it once in each attack the held button chained,
+    // each time for the weapon's damage alone, here the leader's bare
+    // hand's, at least 1; and it lives
+    int hits = game.jaSaber().hitCount();
+    EXPECT_GE(hits, 1);
+    EXPECT_FALSE(big->isDead());
+    EXPECT_LE(big->currentHitPoints(), 20 - hits);
+    EXPECT_GT(big->currentHitPoints(), 0);
+
+    // The engine's mocks are shared by every test: later ones find no
+    // appearance table, as before this one.
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance")).Times(AnyNumber());
+}

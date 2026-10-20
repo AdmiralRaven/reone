@@ -498,6 +498,35 @@ TEST(JaSaberDamage, should_spare_kotors_friendly_factions_though_hostile) {
     }
 }
 
+TEST(JaSaberDamage, should_put_large_and_huge_creatures_on_a_health_bar) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance"))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(sizedAppearances()));
+
+    // for each row of sizedAppearances, whether a saber's hit cuts the
+    // creature down: small and medium ones yes, large and huge ones no
+    for (auto [row, cut] : std::vector<std::pair<int, bool>> {{0, true}, {1, true}, {2, false}, {3, false}}) {
+        auto creature = game.newCreature();
+        creature->setAppearance(row);
+        creature->loadAppearance();
+        creature->setMaxHitPoints(300);
+        creature->setCurrentHitPoints(300);
+        EXPECT_EQ(!cut, jaTooBigToCut(*creature)) << row;
+        EXPECT_EQ(cut ? 300 : 0, jaSaberHitExtraDamage(*creature)) << row;
+    }
+
+    // a creature whose appearance never loaded is cut down, as before
+    auto unloaded = game.newCreature();
+    EXPECT_FALSE(jaTooBigToCut(*unloaded));
+
+    // The engine's mocks are shared by every test: later ones find no
+    // appearance table, as before this one.
+    EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance")).Times(AnyNumber());
+}
+
 TEST(JaSaberDamage, should_add_the_hit_points_of_a_creature_that_cant_block) {
     TestEngine &engine = testEngine();
     StubConsole console;
