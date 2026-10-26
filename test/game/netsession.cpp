@@ -26,6 +26,7 @@
 #include "reone/game/object/creature.h"
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
+#include "reone/game/savegame.h"
 #include "reone/game/script/runner.h"
 
 using namespace reone;
@@ -260,4 +261,95 @@ TEST_F(NetSessionTest, should_refuse_a_member_not_in_the_party) {
     EXPECT_THROW(host.net().host(0, 5), std::runtime_error);
     EXPECT_THROW(guest.net().join("127.0.0.1", 7777, 5), std::runtime_error);
     EXPECT_EQ(NetRole::None, guest.net().role());
+}
+
+TEST_F(NetSessionTest, should_refuse_the_pc_as_the_guests_hero) {
+    // the PC is the host's: both sides would drive it
+    EXPECT_THROW(host.net().host(0, kNpcPlayer), std::runtime_error);
+    EXPECT_THROW(guest.net().join("127.0.0.1", 7777, kNpcPlayer), std::runtime_error);
+    EXPECT_EQ(NetRole::None, host.net().role());
+}
+
+TEST_F(NetSessionTest, should_keep_each_sides_leader_while_the_session_runs) {
+    // given
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+
+    // when: Tab, a portrait or a script would change the leader
+    host.game.party().switchLeader();
+    host.game.party().setPartyLeaderByIndex(1);
+    guest.game.party().setPartyLeader(kNpcPlayer);
+
+    // then: each side keeps its hero
+    EXPECT_EQ(host.pc, host.game.party().getLeader());
+    EXPECT_EQ(guest.companion, guest.game.party().getLeader());
+
+    // when: the session ends
+    guest.net().stop("the test is over");
+    host.net().stop("the test is over");
+
+    // then: the guest's PC leads again, and the leader can change
+    EXPECT_EQ(guest.pc, guest.game.party().getLeader());
+    host.game.party().setPartyLeaderByIndex(1);
+    EXPECT_EQ(host.companion, host.game.party().getLeader());
+}
+
+TEST_F(NetSessionTest, should_refuse_the_guests_saves_and_clicks_on_the_world) {
+    // given
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    // when: the guest saves, and clicks the enemy to attack it
+    auto save = guest.game.requestSave(SaveRequest {});
+    guest.game.module()->onObjectClick(guest.enemy);
+
+    // then: neither happens on the guest
+    EXPECT_EQ(SaveStatus::NotAllowed, save.status);
+    EXPECT_TRUE(guest.companion->actions().empty());
+
+    // and the host's click is its own, as ever
+    host.game.module()->onObjectClick(host.enemy);
+    EXPECT_FALSE(host.pc->actions().empty());
+}
+
+TEST_F(NetSessionTest, should_count_creatures_the_guest_lacks_and_compare_the_objects_again) {
+    // given: joined, the objects matching
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    ASSERT_EQ(std::optional<bool>(true), guest.net().manifestsMatch());
+
+    // when: a script spawns a creature on the host
+    auto spawned = host.game.newCreature();
+    spawned->setTag("end_sith4");
+    host.game.module()->area()->add(spawned);
+    exchange(150);
+
+    // then: the guest counts its states, and both sides see the objects differ
+    EXPECT_GE(guest.net().counts().unknown, 1);
+    EXPECT_EQ(std::optional<bool>(false), guest.net().manifestsMatch());
+    EXPECT_EQ(std::optional<bool>(false), host.net().manifestsMatch());
+}
+
+TEST_F(NetSessionTest, should_bring_back_a_creature_the_host_has_alive_again) {
+    // given: the enemy dead on both sides
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.enemy->setCurrentHitPoints(0);
+    exchange(12);
+    ASSERT_TRUE(guest.enemy->isDead());
+
+    // when: the host has it alive again
+    host.enemy->setCurrentHitPoints(10);
+    exchange(12);
+
+    // then
+    EXPECT_FALSE(guest.enemy->isDead());
+    EXPECT_EQ(10, guest.enemy->currentHitPoints());
 }

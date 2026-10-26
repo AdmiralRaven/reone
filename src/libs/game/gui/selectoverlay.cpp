@@ -37,6 +37,7 @@
 #include "reone/game/game.h"
 #include "reone/game/gui.h"
 #include "reone/game/party.h"
+#include "reone/system/logutil.h"
 
 using namespace reone::graphics;
 using namespace reone::resource;
@@ -175,6 +176,12 @@ bool SelectionOverlay::handleMouseButtonDown(const input::MouseButtonEvent &even
 
     if (slot.indexSelected >= slot.actions.size())
         return false;
+
+    if (_game.followingHost()) {
+        // As Module::onObjectClick: the guest's feats, skills and powers would act on this side only.
+        info("net: the guest leaves actions on " + selectedObject->tag() + " to the host for now");
+        return true;
+    }
 
     const ContextAction &ctxAction = slot.actions[slot.indexSelected];
     std::shared_ptr<Action> action;

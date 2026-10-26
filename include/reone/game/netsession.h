@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <set>
+
 #include "reone/game/jacontact.h"
 
 namespace reone {
@@ -65,8 +67,13 @@ public:
     /** An IPv4 address, dotted or a host name such as localhost. */
     static std::optional<Address> resolve(const std::string &host, uint16_t port);
 
+    /** Receives that failed other than for nothing waiting or a reset. */
+    int errors() const { return _errors; }
+
 private:
     intptr_t _socket {-1};
+    std::vector<uint8_t> _buffer;
+    int _errors {0};
 };
 
 /** Which side of a two-player session this process is. */
@@ -134,7 +141,7 @@ public:
     /** The UDP port this side listens on; 0 with no session. */
     uint16_t localPort() const { return _socket.localPort(); }
 
-    /** The guest's hero, by its party NPC number (kNpcPlayer for the PC). */
+    /** The guest's hero, by its party NPC number; never the PC, kNpcPlayer, which is the host's. */
     int guestNpc() const { return _guestNpc; }
 
     /**
@@ -156,7 +163,8 @@ public:
     void stop(const std::string &reason = std::string());
 
     /**
-     * Every frame, after the module's update, paused or not: takes in what
+     * Every frame, after the module's update, paused or not, but not while
+     * a movie plays (Game::update returns before it then): takes in what
      * arrived, applies it, and sends what is due, by real time.
      */
     void update();
@@ -189,6 +197,9 @@ public:
         int hitsForwarded {0};
         int hitsApplied {0};
         int rejected {0};     /**< datagrams that weren't this protocol's, or came from elsewhere */
+        int unknown {0};      /**< creature states for IDs this side doesn't have */
+        int stale {0};        /**< snapshots older than one applied */
+        int held {0};         /**< the guest's states the host held off while in a conversation */
     };
     const Counts &counts() const { return _counts; }
 
@@ -208,6 +219,9 @@ private:
     double _lastHeard {0.0};
     double _lastUpdate {0.0};
     float _sinceSend {0.0f};
+    float _sinceHello {0.0f};
+    bool _holding {false};
+    std::set<uint32_t> _unknownIds;
     std::optional<bool> _manifestsMatch;
     bool _helloAnswered {false};
     Counts _counts;

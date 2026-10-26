@@ -516,6 +516,10 @@ void Party::switchLeader() {
     if (_members.size() <= 1) {
         return;
     }
+    if (_leaderLocked) {
+        info("Party: the leader stays while a two-player session runs");
+        return;
+    }
 
     Member tmp(_members[0]);
     _members.erase(_members.begin());
@@ -720,6 +724,10 @@ void Party::setPartyLeader(int npc) {
 void Party::setPartyLeaderByIndex(int index) {
     if (index < 1 || index >= _members.size())
         return;
+    if (_leaderLocked) {
+        info("Party: the leader stays while a two-player session runs");
+        return;
+    }
 
     Member tmp(_members[0]);
     _members[0] = _members[index];

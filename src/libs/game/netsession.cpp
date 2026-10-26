@@ -24,8 +24,14 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
+#ifndef SIO_UDP_CONNRESET
+// As the Windows SDK's mstcpip.h has it; MinGW's may not.
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 #else
 #include <arpa/inet.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -91,6 +97,7 @@ Handle handleOf(intptr_t socket) {
 constexpr uint8_t kMagic[] {'R', 'N', 'E', 'T'};
 constexpr size_t kHeaderSize = 4 + 2 + 1 + 4;
 constexpr float kHelloInterval = 0.5f;
+constexpr float kManifestInterval = 2.0f;
 constexpr size_t kMaxDatagram = 1400;
 
 // Little-endian writing and reading.
@@ -270,10 +277,23 @@ void NetSocket::open(uint16_t port) {
     }
 #ifdef _WIN32
     u_long nonBlocking = 1;
-    ioctlsocket(handle, FIONBIO, &nonBlocking);
+    bool blocking = ioctlsocket(handle, FIONBIO, &nonBlocking) != 0;
+    // A datagram to a port no one listens on, as to a guest gone, makes
+    // Windows fail the next receive with WSAECONNRESET; have it not.
+    BOOL reportResets = FALSE;
+    DWORD returned = 0;
+    if (WSAIoctl(handle, SIO_UDP_CONNRESET, &reportResets, sizeof(reportResets), nullptr, 0, &returned, nullptr, nullptr) != 0) {
+        warn("net: Windows will report resets on this socket; receive skips them");
+    }
 #else
-    fcntl(handle, F_SETFL, fcntl(handle, F_GETFL, 0) | O_NONBLOCK);
+    int flags = fcntl(handle, F_GETFL, 0);
+    bool blocking = flags < 0 || fcntl(handle, F_SETFL, flags | O_NONBLOCK) != 0;
 #endif
+    if (blocking) {
+        // A blocking receive would stop the game every frame.
+        closeHandle(handle);
+        throw std::runtime_error("The UDP socket can't be made non-blocking");
+    }
     _socket = static_cast<intptr_t>(handle);
 }
 
@@ -320,24 +340,45 @@ std::optional<NetSocket::Datagram> NetSocket::receive() {
     if (!isOpen()) {
         return std::nullopt;
     }
-    std::vector<uint8_t> buffer(65536);
-    sockaddr_in address {};
+    _buffer.resize(65536);
+    // A reset, from a datagram sent to a port no one listens on, says nothing
+    // of what is waiting: past it, a few times, to the next datagram.
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        sockaddr_in address {};
 #ifdef _WIN32
-    int length = sizeof(address);
+        int length = sizeof(address);
 #else
-    socklen_t length = sizeof(address);
+        socklen_t length = sizeof(address);
 #endif
-    auto received = ::recvfrom(handleOf(_socket), reinterpret_cast<char *>(buffer.data()), static_cast<int>(buffer.size()), 0,
-                               reinterpret_cast<sockaddr *>(&address), &length);
-    if (received <= 0) {
+        auto received = ::recvfrom(handleOf(_socket), reinterpret_cast<char *>(_buffer.data()), static_cast<int>(_buffer.size()), 0,
+                                   reinterpret_cast<sockaddr *>(&address), &length);
+        if (received >= 0) {
+            Datagram datagram;
+            datagram.from.ip = ntohl(address.sin_addr.s_addr);
+            datagram.from.port = ntohs(address.sin_port);
+            datagram.bytes.assign(_buffer.begin(), _buffer.begin() + received);
+            return datagram;
+        }
+#ifdef _WIN32
+        int failure = WSAGetLastError();
+        if (failure == WSAECONNRESET) {
+            continue;
+        }
+        if (failure != WSAEWOULDBLOCK) {
+            ++_errors;
+        }
+#else
+        int failure = errno;
+        if (failure == ECONNREFUSED) {
+            continue;
+        }
+        if (failure != EAGAIN && failure != EWOULDBLOCK) {
+            ++_errors;
+        }
+#endif
         return std::nullopt;
     }
-    buffer.resize(static_cast<size_t>(received));
-    Datagram datagram;
-    datagram.from.ip = ntohl(address.sin_addr.s_addr);
-    datagram.from.port = ntohs(address.sin_port);
-    datagram.bytes = std::move(buffer);
-    return datagram;
+    return std::nullopt;
 }
 
 std::optional<NetSocket::Address> NetSocket::resolve(const std::string &host, uint16_t port) {
@@ -385,6 +426,9 @@ void NetSession::host(uint16_t port, int guestNpc) {
     if (!_game.module() || !_game.module()->area()) {
         throw std::runtime_error("Load a game first");
     }
+    if (guestNpc == kNpcPlayer) {
+        throw std::runtime_error("The guest plays a party member; the PC is the host's");
+    }
     _guestNpc = guestNpc;
     if (!guestHero()) {
         throw std::runtime_error("No party member " + std::to_string(guestNpc) + " for the guest to play");
@@ -392,6 +436,7 @@ void NetSession::host(uint16_t port, int guestNpc) {
     _socket.open(port);
     _role = NetRole::Host;
     _lastHeard = now();
+    _game.party().setLeaderLocked(true);
     info(str(boost::format("net: hosting on UDP port %d for a guest playing party member %d (%s); objects %016x") %
              _socket.localPort() % guestNpc % guestHero()->tag() % manifestHash()));
 }
@@ -405,6 +450,9 @@ void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
     if (!address) {
         throw std::runtime_error("Unknown host " + host);
     }
+    if (guestNpc == kNpcPlayer) {
+        throw std::runtime_error("The guest plays a party member; the PC is the host's");
+    }
     _guestNpc = guestNpc;
     auto hero = guestHero();
     if (!hero) {
@@ -416,6 +464,7 @@ void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
     _lastHeard = now();
     // The guest's controls, camera and saber mode drive its hero.
     _game.party().setPartyLeader(guestNpc);
+    _game.party().setLeaderLocked(true);
     _game.setFollowingHost(true);
     info(str(boost::format("net: joining %s as party member %d (%s); objects %016x") %
              _peer.str() % guestNpc % hero->tag() % manifestHash()));
@@ -426,8 +475,13 @@ void NetSession::stop(const std::string &reason) {
     if (_role == NetRole::None) {
         return;
     }
+    _game.party().setLeaderLocked(false);
     if (_role == NetRole::Guest) {
         _game.setFollowingHost(false);
+        // The PC leads again, as before the session.
+        if (_game.module() && _game.module()->area()) {
+            _game.party().setPartyLeader(kNpcPlayer);
+        }
     }
     _socket.close();
     info("net: session over" + (reason.empty() ? std::string() : ", " + reason) + "; " + status());
@@ -438,7 +492,10 @@ void NetSession::stop(const std::string &reason) {
     _sequence = 0;
     _lastReceived = 0;
     _sinceSend = 0.0f;
+    _sinceHello = 0.0f;
     _lastUpdate = 0.0;
+    _holding = false;
+    _unknownIds.clear();
     _counts = Counts();
 }
 
@@ -552,12 +609,18 @@ void NetSession::update() {
     }
 
     _sinceSend += elapsed;
+    _sinceHello += elapsed;
     if (_role == NetRole::Guest && !_connected) {
         if (_sinceSend >= kHelloInterval) {
             _sinceSend = 0.0f;
             sendHello();
         }
         return;
+    }
+    if (_role == NetRole::Guest && _sinceHello >= kManifestInterval) {
+        // Now and then, for both sides to compare their objects again.
+        _sinceHello = 0.0f;
+        sendHello();
     }
     if (!_connected || _sinceSend < kSendInterval) {
         return;
@@ -588,6 +651,7 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         // A guest, new or come back.
         _peer = datagram.from;
         _lastReceived = 0;
+        _connected = false;
     }
     if (datagram.from != _peer) {
         ++_counts.rejected;
@@ -606,14 +670,31 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             ++_counts.rejected;
             return;
         }
+        if (npc != _guestNpc) {
+            // Both sides would drive different heroes, and neither the other's.
+            ++_counts.rejected;
+            if (!_connected) {
+                warn(str(boost::format("net: %s %s plays party member %d, not %d as this side; start both with the same one") %
+                         roleName(role) % _peer.str() % npc % _guestNpc));
+            }
+            return;
+        }
         uint64_t mine = manifestHash();
         bool match = manifest == mine;
         bool first = !_connected;
+        bool changed = _manifestsMatch && *_manifestsMatch != match;
         _manifestsMatch = match;
         _connected = true;
+        if (_role == NetRole::Guest && sequence < _lastReceived) {
+            // A host that started over counts from 1 again.
+            _lastReceived = 0;
+        }
         if (first) {
             info(str(boost::format("net: %s %s is here, playing party member %d; objects %s: %d there, %016x, and %016x here") %
                      roleName(role) % _peer.str() % npc % (match ? "match" : "DIFFER") % objects % manifest % mine));
+        } else if (changed) {
+            info(str(boost::format("net: the two sides' objects %s now: %d there, %016x, and %016x here") %
+                     (match ? "match again" : "DIFFER") % objects % manifest % mine));
         }
         if (_role == NetRole::Host) {
             // Answer each hello, so a guest knows it is heard.
@@ -625,6 +706,11 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
     }
     case MessageType::Snapshot: {
         if (_role != NetRole::Guest) {
+            return;
+        }
+        if (sequence <= _lastReceived) {
+            // Older than one applied: a newer one has said more.
+            ++_counts.stale;
             return;
         }
         uint16_t count = in.u16();
@@ -651,6 +737,22 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         auto hero = guestHero();
         if (!in.ok() || !hero || state.id != hero->id()) {
             ++_counts.rejected;
+            if (in.ok() && hero && _counts.rejected == 1) {
+                warn(str(boost::format("net: the guest sent creature %d as its hero, but here that is %s, %d") %
+                         state.id % hero->tag() % hero->id()));
+            }
+            return;
+        }
+        // In a conversation, KOTOR's scene may move the hero, and waits for
+        // its actions: the guest's place waits until it ends.
+        bool talking = _game.currentScreen() == Game::Screen::Conversation;
+        if (talking != _holding) {
+            _holding = talking;
+            info(talking ? "net: the host is in a conversation; the guest's hero stays as the scene has it"
+                         : "net: the conversation is over; the guest's hero goes where the guest has it");
+        }
+        if (talking) {
+            ++_counts.held;
             return;
         }
         // Where the guest has its hero, but the host keeps its hit points.
@@ -681,7 +783,16 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
 void NetSession::apply(const NetCreatureState &state, bool position) {
     auto creature = _game.getObjectById<Creature>(state.id);
     auto module = _game.module();
-    if (!creature || !module || !module->area()) {
+    if (!module || !module->area()) {
+        return;
+    }
+    if (!creature) {
+        // Such as one a script spawned on the host after the join.
+        ++_counts.unknown;
+        if (_unknownIds.insert(state.id).second) {
+            warn(str(boost::format("net: the %s sent creature %d, which this side doesn't have") %
+                     (_role == NetRole::Guest ? "host" : "guest") % state.id));
+        }
         return;
     }
     if (position) {
@@ -704,8 +815,13 @@ void NetSession::apply(const NetCreatureState &state, bool position) {
             // As the console's kill does: the guest's scripts don't run.
             auto effect = _game.newEffect<DamageEffect>(100000, DamageType::Universal, DamagePower::Normal);
             creature->applyEffect(std::move(effect), DurationType::Instant);
-        } else if (!state.dead && !creature->isDead() && creature->currentHitPoints() != state.hitPoints) {
-            creature->setCurrentHitPoints(state.hitPoints);
+        } else if (!state.dead) {
+            // Alive on the host, if at 0 or less, as an immortal creature
+            // can be: alive here too, or brought back.
+            int hitPoints = std::max<int>(state.hitPoints, 1);
+            if (creature->isDead() || creature->currentHitPoints() != hitPoints) {
+                creature->setCurrentHitPoints(hitPoints);
+            }
         }
     }
     ++_counts.applied;
@@ -715,7 +831,7 @@ void NetSession::applyHit(uint32_t targetId, JaBodyRegion region) {
     auto hero = guestHero();
     auto target = _game.getObjectById<Creature>(targetId);
     auto module = _game.module();
-    if (!hero || !target || target->isDead() || !module || jaSparedBySaber(*target) || !module->isHostileToPartyLeader(*target)) {
+    if (!hero || hero->isDead() || !target || target->isDead() || !module || jaSparedBySaber(*target) || !module->isHostileToPartyLeader(*target)) {
         ++_counts.rejected;
         return;
     }
@@ -801,12 +917,13 @@ std::string NetSession::status() const {
         return str(boost::format("%s at %.2f %.2f") % creature->tag() % creature->position().x % creature->position().y);
     };
     return str(boost::format("net: %s, %s%s, guest playing party member %d; objects %s; PC %s, guest's hero %s; "
-                             "%d sent, %d received, %d applied, %d actions cleared, %d hits sent, %d hits applied, %d rejected") %
+                             "%d sent, %d received, %d applied, %d actions cleared, %d hits sent, %d hits applied, %d rejected, "
+                             "%d unknown, %d stale, %d held, %d receive errors") %
                roleName(_role) % (_connected ? "connected to " : "waiting for ") %
                (_peer.port ? _peer.str() : std::string("a guest")) % _guestNpc % match %
                where(_game.party().player()) % where(guestHero()) %
                _counts.sent % _counts.received % _counts.applied % _counts.clearedActions % _counts.hitsForwarded %
-               _counts.hitsApplied % _counts.rejected);
+               _counts.hitsApplied % _counts.rejected % _counts.unknown % _counts.stale % _counts.held % _socket.errors());
 }
 
 } // namespace game

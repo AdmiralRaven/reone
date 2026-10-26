@@ -329,6 +329,11 @@ bool Module::handleMouseButtonDown(const input::MouseButtonEvent &event) {
 }
 
 void Module::onObjectClick(const std::shared_ptr<Object> &object) {
+    if (_game.followingHost()) {
+        // Talking, looting, doors and use would happen on this side only.
+        reone::info("net: the guest leaves " + object->tag() + " to the host: no talking, looting, doors or use from the guest yet");
+        return;
+    }
     switch (object->type()) {
     case ObjectType::Creature:
         onCreatureClick(std::static_pointer_cast<Creature>(object));

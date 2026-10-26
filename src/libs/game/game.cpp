@@ -763,10 +763,7 @@ bool Game::handle(const input::Event &event) {
         }
         switch (_screen) {
         case Screen::InGame: {
-            // In a two-player session each side keeps its own hero.
-            bool sessionKeepsLeader = keepsRunningUnfocused() && event.type == input::EventType::KeyDown &&
-                                      event.key.code == input::KeyCode::Tab;
-            if (!sessionKeepsLeader && _party.handle(event)) {
+            if (_party.handle(event)) {
                 return true;
             }
             auto camera = getActiveCamera();

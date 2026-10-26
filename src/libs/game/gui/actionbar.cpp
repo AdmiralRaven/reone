@@ -22,6 +22,7 @@
 #include "reone/gui/control/button.h"
 #include "reone/gui/control/label.h"
 #include "reone/input/event.h"
+#include "reone/system/logutil.h"
 
 namespace reone {
 namespace game {
@@ -120,6 +121,12 @@ void ActionBar::handleMouseButtonDown(ActionSlot &slot) {
 
     std::shared_ptr<Creature> leader = _game.party().getLeader();
     if (!leader) {
+        return;
+    }
+
+    if (_game.followingHost()) {
+        // A medpac or a power is a script, and the guest runs none.
+        info("net: the guest can't use items or powers yet");
         return;
     }
 

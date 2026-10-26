@@ -236,7 +236,10 @@ int Engine::run() {
         if (quit) {
             break;
         }
-        if (!_window->isInFocus() && !_options.graphics.headless && !_game->keepsRunningUnfocused()) {
+        // Out of focus the game waits, unless a command file is still being
+        // run, as for a two-player session's scripted start, or a session runs.
+        bool scripted = !_scriptedCommands.empty() || _scriptPauseFrames > 0 || _captureRequest.has_value();
+        if (!_window->isInFocus() && !_options.graphics.headless && !scripted && !_game->keepsRunningUnfocused()) {
             std::this_thread::sleep_for(std::chrono::milliseconds {100});
             continue;
         }

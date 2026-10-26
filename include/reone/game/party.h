@@ -178,6 +178,13 @@ public:
 
     void setPartyLeader(int npc);
     void setPartyLeaderByIndex(int index);
+
+    /**
+     * Whether the party leader stays as it is: Tab, the portraits and
+     * SetPartyLeader leave it, as while a two-player session runs (#39).
+     */
+    bool leaderLocked() const { return _leaderLocked; }
+    void setLeaderLocked(bool locked) { _leaderLocked = locked; }
     void setPlayer(const std::shared_ptr<Creature> &player);
     void setActualPlayer(const std::shared_ptr<Creature> &player) { _actualPlayer = player; }
     void setSoloMode(bool value) { _solo = value; }
@@ -379,6 +386,7 @@ private:
     std::map<int, std::shared_ptr<Creature>> _npcBindings;
     std::vector<Member> _members;
     bool _solo {false};
+    bool _leaderLocked {false};
     int _gold {0};
     int _xp {0};
     GalaxyMapState _galaxyMap;
