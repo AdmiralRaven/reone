@@ -213,6 +213,9 @@ public:
     const JaSaberStateMachine &machine() const { return _machine; }
     const JaBodyAnimator &animator() const { return _animator; }
 
+    /** Has the saber parry on the next step (JaSaberStateMachine::block); the parry then plays as any move does. */
+    bool block(int parry, int weaponTimeMs = 0) { return _machine.block(parry, weaponTimeMs); }
+
 private:
     const JaSequencer &_sequencer;
     const JaRetargeter &_retargeter;

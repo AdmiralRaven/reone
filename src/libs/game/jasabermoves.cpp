@@ -58,7 +58,38 @@ constexpr int kFirstStart = kFirstAttack + kNumAttacks;
 constexpr int kFirstReturn = kFirstStart + kNumAttacks;
 constexpr int kFirstTransition = kFirstReturn + kNumAttacks;
 constexpr int kTransitionSources = 7; // every quadrant but the bottom
-constexpr int kNumMoves = kFirstTransition + kTransitionSources * (kTransitionSources - 1);
+constexpr int kNumBlocks = 5;
+constexpr int kFirstParry = kFirstTransition + kTransitionSources * (kTransitionSources - 1);
+constexpr int kFirstReflect = kFirstParry + kNumBlocks;
+constexpr int kNumMoves = kFirstReflect + kNumBlocks;
+
+struct ParrySpec {
+    const char *name;
+    const char *clip;
+    JaQuad end;
+    JaQuad chainAttackFrom; /**< where the attack the held button goes on to starts */
+};
+
+// The parries of a blow and of a bolt, in JaBlock's order: the top, the upper
+// right, the upper left, the lower right and the lower left
+// (bg_panimate.cpp:308-322). They start on the right; a bolt's parries play
+// some of the blow's clips mirrored.
+const std::array<ParrySpec, kNumBlocks> kParries {{
+    {"LS_PARRY_UP", "BOTH_P1_S1_T_", JaQuad::T, JaQuad::T},
+    {"LS_PARRY_UR", "BOTH_P1_S1_TR", JaQuad::TL, JaQuad::TR},
+    {"LS_PARRY_UL", "BOTH_P1_S1_TL", JaQuad::TR, JaQuad::TL},
+    {"LS_PARRY_LR", "BOTH_P1_S1_BL", JaQuad::BR, JaQuad::BR},
+    {"LS_PARRY_LL", "BOTH_P1_S1_BR", JaQuad::BL, JaQuad::BL},
+}};
+const std::array<ParrySpec, kNumBlocks> kReflects {{
+    {"LS_REFLECT_UP", "BOTH_P1_S1_T_", JaQuad::T, JaQuad::T},
+    {"LS_REFLECT_UR", "BOTH_P1_S1_TL", JaQuad::TR, JaQuad::TL},
+    {"LS_REFLECT_UL", "BOTH_P1_S1_TR", JaQuad::TL, JaQuad::TR},
+    {"LS_REFLECT_LR", "BOTH_P1_S1_BR", JaQuad::BL, JaQuad::BL},
+    {"LS_REFLECT_LL", "BOTH_P1_S1_BL", JaQuad::BR, JaQuad::BR},
+}};
+
+constexpr int kParryBlendMs = 50; // bg_panimate.cpp:308-322
 
 constexpr int kReadyBlendMs = 350; // bg_panimate.cpp:127
 constexpr int kMoveBlendMs = 100;  // starts, returns and transitions (205-264)
@@ -156,6 +187,24 @@ JaSaberMoves::JaSaberMoves() {
         }
     }
 
+    for (int b = 0; b < kNumBlocks; ++b) {
+        for (int set = 0; set < 2; ++set) {
+            const ParrySpec &spec = set == 0 ? kParries[b] : kReflects[b];
+            int id = (set == 0 ? kFirstParry : kFirstReflect) + b;
+            JaSaberMove &move = _moves[id];
+            move.id = id;
+            move.name = spec.name;
+            move.clip = spec.clip;
+            move.kind = JaMoveKind::Parry;
+            move.startQuad = JaQuad::R;
+            move.endQuad = spec.end;
+            move.hold = JaMoveHold::Active;
+            move.blendMs = kParryBlendMs;
+            move.chainAttack = attackFrom(spec.chainAttackFrom);
+            move.reflect = set == 1;
+        }
+    }
+
     // Pressing attack with no direction from ready swings right to left (bg_panimate.cpp:127).
     ready.chainAttack = startOf(attackFrom(JaQuad::R));
 
@@ -197,6 +246,41 @@ int JaSaberMoves::returnOf(int attack) const {
         throw std::invalid_argument("Not an attack: " + move(attack).name);
     }
     return kFirstReturn + (attack - kFirstAttack);
+}
+
+int JaSaberMoves::parry(JaBlock block) const {
+    return kFirstParry + static_cast<int>(block);
+}
+
+int JaSaberMoves::reflect(JaBlock block) const {
+    return kFirstReflect + static_cast<int>(block);
+}
+
+const char *jaBlockName(JaBlock block) {
+    switch (block) {
+    case JaBlock::Top:
+        return "top";
+    case JaBlock::UpperRight:
+        return "upper right";
+    case JaBlock::UpperLeft:
+        return "upper left";
+    case JaBlock::LowerRight:
+        return "lower right";
+    case JaBlock::LowerLeft:
+        return "lower left";
+    }
+    return "?";
+}
+
+JaBlock jaBlockFor(float heightUnits, float rightDot) {
+    // wp_saber.cpp:7306-7344
+    if (heightUnits > -5.0f) {
+        return rightDot > 0.3f ? JaBlock::UpperRight : (rightDot < -0.3f ? JaBlock::UpperLeft : JaBlock::Top);
+    }
+    if (heightUnits > -22.0f) {
+        return rightDot > 0.1f ? JaBlock::UpperRight : (rightDot < -0.1f ? JaBlock::UpperLeft : JaBlock::Top);
+    }
+    return rightDot >= 0.0f ? JaBlock::LowerRight : JaBlock::LowerLeft;
 }
 
 int JaSaberMoves::attackOf(int startOrReturn) const {
@@ -254,9 +338,11 @@ int JaSaberMoves::nextMove(int current, int attack) const {
         // Only ready plays a start (bg_panimate.cpp:4001-4018).
         return startOf(attack);
     case JaMoveKind::Attack:
-    case JaMoveKind::Return: {
+    case JaMoveKind::Return:
+    case JaMoveKind::Parry: {
         // bg_panimate.cpp:4050-4146: straight on when the attack starts where
-        // this move ends, else by the transition there.
+        // this move ends, else by the transition there; from a parry too
+        // (4111-4140).
         if (from.endQuad == next.startQuad) {
             return attack;
         }
@@ -338,6 +424,25 @@ void JaSaberStateMachine::reset() {
     _move = _moves.ready();
     _torsoTimer = 0.0;
     _weaponTime = 0.0;
+    _block.reset();
+}
+
+bool JaSaberStateMachine::canBlock() const {
+    auto kind = _moves.move(_move).kind;
+    return kind == JaMoveKind::Ready || kind == JaMoveKind::Parry;
+}
+
+bool JaSaberStateMachine::block(int parry, int weaponTimeMs) {
+    if (_moves.move(parry).kind != JaMoveKind::Parry) {
+        throw std::invalid_argument("Not a parry: " + _moves.move(parry).name);
+    }
+    if (!canBlock()) {
+        return false;
+    }
+    if (!_block) {
+        _block = Block {parry, std::max(0, weaponTimeMs)};
+    }
+    return true;
 }
 
 bool JaSaberStateMachine::set(int id, std::vector<int> &started) {
@@ -361,8 +466,22 @@ std::vector<int> JaSaberStateMachine::tick(float dt, const JaSaberInput &input) 
     // PM_DropTimers and PM_WeaponLightsaber (bg_pmove.cpp:14320-14361, 11947-11953)
     _torsoTimer = jaCountDown(_torsoTimer, dt);
     _weaponTime = jaCountDown(_weaponTime, dt);
+    if (_block) {
+        // PM_SaberBlocking takes the tick for the parry (bg_pmove.cpp:11578-11885).
+        Block block = *_block;
+        _block.reset();
+        if (canBlock()) {
+            set(block.move, started);
+            _weaponTime = static_cast<double>(block.weaponTimeMs);
+            return started;
+        }
+    }
     bool direction = input.forward != 0 || input.right != 0;
     const JaSaberMove &current = _moves.move(_move);
+    if (current.kind == JaMoveKind::Parry && current.reflect && input.attack) {
+        // The button breaks out of a bolt's parry (bg_pmove.cpp:11590-11607).
+        _weaponTime = 0.0;
+    }
 
     if (_weaponTime > 0.0) {
         // Busy (bg_pmove.cpp:12224-12276). Moving during a return with the
@@ -402,16 +521,24 @@ std::vector<int> JaSaberStateMachine::tick(float dt, const JaSaberInput &input) 
             next = _moves.attackOf(_move);
         } else {
             next = _moves.attackForMovement(input.forward, input.right, input.pitch, _move);
-            next = next != JaSaberMoves::kNone ? _moves.nextMove(_move, next) : current.chainAttack;
+            if (next != JaSaberMoves::kNone) {
+                next = _moves.nextMove(_move, next);
+            } else if (current.kind == JaMoveKind::Parry) {
+                // A parry's own attack, from where the parry ends.
+                next = _moves.nextMove(_move, current.chainAttack);
+            } else {
+                next = current.chainAttack;
+            }
         }
         set(next, started);
         // 12787-12791, 12806-12889
         _weaponTime = _torsoTimer > 0.0 ? _torsoTimer : static_cast<double>(_fireTimeMs);
     }
 
-    // The idle torso (bg_panimate.cpp:5200-5223): a return goes back to ready
-    // once the saber is free and the return has run out.
-    if (_weaponTime <= 0.0 && _moves.move(_move).kind == JaMoveKind::Return) {
+    // The idle torso (bg_panimate.cpp:5200-5223): a return or a parry goes
+    // back to ready once the saber is free and the move has run out.
+    auto kind = _moves.move(_move).kind;
+    if (_weaponTime <= 0.0 && (kind == JaMoveKind::Return || kind == JaMoveKind::Parry)) {
         set(_moves.ready(), started);
     }
     return started;

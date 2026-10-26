@@ -1017,6 +1017,12 @@ void AttackBuffer::addCombatFeedback(
     }
 }
 
+size_t AttackBuffer::successCount() const {
+    return static_cast<size_t>(std::count_if(_attacks.begin(), _attacks.end(), [](const Attack &attack) {
+        return isAttackSuccessful(attack.result);
+    }));
+}
+
 AttackResultType AttackBuffer::result() const {
     AttackResultType sorted[] {
         AttackResultType::Invalid,

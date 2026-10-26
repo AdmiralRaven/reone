@@ -50,9 +50,34 @@ enum class JaMoveKind {
     Ready,     /**< the ready stance, LS_READY */
     Start,     /**< from ready to an attack's first pose, LS_S_* */
     Attack,    /**< LS_A_* */
-    Return,    /**< from an attack's last pose back to ready, LS_R_* */
-    Transition /**< between attacks, from one quadrant to another, LS_T1_* */
+    Return,     /**< from an attack's last pose back to ready, LS_R_* */
+    Transition, /**< between attacks, from one quadrant to another, LS_T1_* */
+    Parry       /**< the saber blocking a blow, LS_PARRY_*, or a bolt, LS_REFLECT_* */
 };
+
+/**
+ * Where the saber blocks, as Jedi Academy picks it from where a blow or a bolt
+ * meets the defender (WP_SaberBlockNonRandom, wp_saber.cpp:7267-7344): its
+ * saberBlocked states, BLOCKED_TOP to BLOCKED_LOWER_LEFT.
+ */
+enum class JaBlock {
+    Top,
+    UpperRight,
+    UpperLeft,
+    LowerRight,
+    LowerLeft
+};
+
+const char *jaBlockName(JaBlock block);
+
+/**
+ * The block for an impact \p heightUnits JA units above the eye (below it when
+ * negative), with \p rightDot the share of its direction, level, to the
+ * defender's right (WP_SaberBlockNonRandom): above 5 units below the eye,
+ * the upper right beyond 0.3, the upper left below -0.3, else the top; above
+ * 22 units below it, the same at 0.1; lower, the lower right or left.
+ */
+JaBlock jaBlockFor(float heightUnits, float rightDot);
 
 /** How a move's clip claims the body (bg_panimate.cpp:116-119, bg_public.h:170-174). */
 enum class JaMoveHold {
@@ -79,6 +104,8 @@ struct JaSaberMove {
      * the whole body even on the move, and slows the movement while it plays.
      */
     bool spin {false};
+    /** A parry of a bolt, LS_REFLECT_*, rather than of a blow, LS_PARRY_*. */
+    bool reflect {false};
 };
 
 /** How a move plays its clip. */
@@ -91,9 +118,10 @@ struct JaMoveTiming {
 
 /**
  * The fast style's ordinary moves: the ready stance, seven attacks with their
- * starts and returns, and the 42 transitions between attacks. The fast style
- * plays the table's own clips (bg_pmove.cpp:9389-9399), with the fast ready
- * pose (9086-9116).
+ * starts and returns, the 42 transitions between attacks, and the five
+ * parries of a blow and five of a bolt (bg_panimate.cpp:308-322). The fast
+ * style plays the table's own clips (bg_pmove.cpp:9389-9399), with the fast
+ * ready pose (9086-9116).
  */
 class JaSaberMoves : boost::noncopyable {
 public:
@@ -114,6 +142,12 @@ public:
 
     int startOf(int attack) const;
     int returnOf(int attack) const;
+
+    /** The parry of a blow for a block, LS_PARRY_* (PM_SaberBlocking, bg_pmove.cpp:11660-11880). */
+    int parry(JaBlock block) const;
+
+    /** The parry of a bolt for a block, LS_REFLECT_*; its clips mirror some of the blow's. */
+    int reflect(JaBlock block) const;
 
     /** The attack that a start or a return belongs to. */
     int attackOf(int startOrReturn) const;
@@ -211,6 +245,24 @@ public:
     /** Advances \p dt seconds with \p input; returns the moves that started, in order. */
     std::vector<int> tick(float dt, const JaSaberInput &input);
 
+    /**
+     * Has the saber parry, as Jedi Academy's player does when a blow or a
+     * bolt meets it (PM_SaberBlocking, bg_pmove.cpp:11578-11885): \p parry,
+     * one of JaSaberMoves::parry or reflect, starts on the next tick, cutting
+     * in, and input counts again \p weaponTimeMs after it. Only from the
+     * ready stance or another parry; otherwise nothing changes. A parry ends
+     * in the ready stance with the button up, and the held button goes on to
+     * an attack from where it ends (PM_SaberAnimTransitionMove,
+     * bg_panimate.cpp:4111-4140); during a bolt's parry, the button frees the
+     * saber at once (bg_pmove.cpp:11590-11607).
+     *
+     * \return whether the parry will start
+     */
+    bool block(int parry, int weaponTimeMs = 0);
+
+    /** Whether block() would take a parry now: in the ready stance or a parry. */
+    bool canBlock() const;
+
     /** Back to ready, holding nothing. */
     void reset();
 
@@ -228,6 +280,12 @@ private:
     int _move {0};
     double _torsoTimer {0.0}; /**< how long the current clip still holds the body, in ms */
     double _weaponTime {0.0}; /**< how long until input counts again, in ms */
+
+    struct Block {
+        int move {-1};
+        int weaponTimeMs {0};
+    };
+    std::optional<Block> _block; /**< a parry to start on the next tick */
 
     bool set(int move, std::vector<int> &started);
 };

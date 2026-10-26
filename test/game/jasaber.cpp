@@ -32,10 +32,13 @@
 #include "reone/game/object/camera/thirdperson.h"
 #include "reone/game/object/creature.h"
 #include "reone/game/object/door.h"
+#include "reone/game/object/item.h"
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
+#include "reone/game/saveprovenance.h"
 #include "reone/graphics/options.h"
 #include "reone/graphics/types.h"
+#include "reone/resource/2da.h"
 #include "reone/resource/gff.h"
 #include "reone/scene/graph.h"
 #include "reone/scene/node/model.h"
@@ -938,4 +941,233 @@ TEST_F(JaSaberHits, should_wound_a_creature_too_big_to_cut_down_not_kill_it) {
     // The engine's mocks are shared by every test: later ones find no
     // appearance table, as before this one.
     EXPECT_CALL(engine.resourceModule().twoDas(), get("appearance")).Times(AnyNumber());
+}
+
+// Enemies in real time, and the saber's defense
+
+namespace {
+
+// KOTOR's base items as these tests need them, at their retail rows: a
+// vibroblade and a blaster pistol.
+std::shared_ptr<TwoDA> foeWeaponTable() {
+    TwoDA::Builder builder;
+    builder.columns({"maxattackrange", "crithitmult", "critthreat", "damageflags", "dietoroll",
+                     "equipableslots", "itemclass", "numdice", "weapontype", "weaponwield",
+                     "ammunitiontype", "bodyvar"});
+    for (int i = 0; i <= 12; ++i) {
+        if (i == 5) {
+            builder.row({"1.5", "2", "2", "2", "10", "48", "w_vbroshort", "1", "1", "2", "-1", ""});
+        } else if (i == 12) {
+            builder.row({"23", "2", "2", "2", "6", "48", "w_blstrpstl", "1", "4", "4", "-1", ""});
+        } else {
+            builder.row({"", "", "", "", "", "", "", "", "", "", "", ""});
+        }
+    }
+    return builder.build();
+}
+
+constexpr int kVibroblade = 5;
+constexpr int kBlasterPistol = 12;
+
+// Draws that always come up as \p pick says, from the range asked.
+JaRandom drawing(std::function<int(int, int)> pick) {
+    return [pick = std::move(pick)](int low, int high) { return glm::clamp(pick(low, high), low, high); };
+}
+
+JaRandomFloat lowest() {
+    return [](float low, float) { return low; };
+}
+
+// Saber mode with enemies that attack the leader, KOTOR's way: an attack
+// action on it, which the real-time foes take over.
+class JaSaberFoes : public JaSaberHits {
+protected:
+    void SetUp() override {
+        JaSaberHits::SetUp();
+        EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems"))
+            .Times(AnyNumber())
+            .WillRepeatedly(Return(weapons));
+        leader->setMaxHitPoints(100);
+        leader->setCurrentHitPoints(100);
+        // The blade lit, and the guard with it.
+        play(1.0f / 60.0f);
+    }
+
+    void TearDown() override {
+        // The engine's mocks are shared by every test: later ones find no
+        // base items, as before these.
+        EXPECT_CALL(engine.resourceModule().twoDas(), get("baseitems")).Times(AnyNumber());
+        JaSaberHits::TearDown();
+    }
+
+    std::shared_ptr<Item> weapon(int baseItem) {
+        auto gff = Gff::Builder()
+                       .field(Gff::Field::newCExoString("Tag", "test_weapon_" + std::to_string(baseItem)))
+                       .field(Gff::Field::newInt("BaseItem", baseItem))
+                       .field(Gff::Field::newWord("StackSize", 1))
+                       .build();
+        auto item = game.newItem();
+        item->deserialize(*gff, SerializedIdentityContext::templateResource());
+        return item;
+    }
+
+    // A hostile creature with \p baseItem in hand at \p at, whose attacks
+    // always hit, attacking the leader.
+    std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, int baseItem) {
+        auto foe = addCreature(tag, at, 1.0f, true);
+        EXPECT_TRUE(foe->equip(InventorySlots::rightWeapon, weapon(baseItem)));
+        foe->applyAssuredHit();
+        foe->addAction(game.newAction<AttackObjectAction>(leader));
+        return foe;
+    }
+
+    JaFoes &foes() {
+        return game.jaSaber().foes();
+    }
+
+    std::shared_ptr<TwoDA> weapons {foeWeaponTable()};
+};
+
+} // namespace
+
+TEST_F(JaSaberFoes, should_shoot_on_its_own_clock_and_hit_the_character_from_behind) {
+    // given: a blaster 6 m behind the leader, who looks the other way, and
+    // the shortest pauses between volleys
+    foes().setRandom(drawing([](int, int high) { return high; }), lowest());
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
+    ASSERT_TRUE(foes().fightsInRealTime(*leader));
+
+    // when
+    play(3.0f);
+
+    // then: it fired volleys in real time, more than KOTOR's one round of 3 s
+    // gives, every bolt aimed, its attacks always hitting
+    EXPECT_GE(foes().counts().volleys, 2);
+    EXPECT_EQ(foes().counts().bolts, foes().counts().aimed);
+    // and its bolts met the leader's back: no parry, no bolt sent back
+    EXPECT_GE(foes().counts().hitCharacter, 2);
+    EXPECT_EQ(0, foes().counts().sentBack);
+    EXPECT_EQ(0, game.jaSaber().parryCount());
+    EXPECT_LT(leader->currentHitPoints(), 100);
+    EXPECT_EQ(20, trooper->currentHitPoints());
+}
+
+TEST_F(JaSaberFoes, should_parry_bolts_from_the_front_and_send_them_back_at_the_shooter) {
+    // given: a blaster 6 m in front of the leader, at defense rank 3, with
+    // draws that stop every bolt and send it back, at the current enemy
+    game.jaSaber().setDefense(3);
+    foes().setRandom(drawing([](int, int high) { return high; }), lowest());
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+
+    // when
+    play(2.0f);
+
+    // then: the saber saw the bolts coming and parried them, sent them back,
+    // and they hit the trooper; none reached the leader
+    EXPECT_GE(foes().counts().bolts, 1);
+    EXPECT_GE(game.jaSaber().parryCount(), 1);
+    EXPECT_GE(foes().counts().sentBack, 1);
+    EXPECT_GE(foes().counts().hitEnemies, 1);
+    EXPECT_EQ(0, foes().counts().hitCharacter);
+    EXPECT_EQ(100, leader->currentHitPoints());
+    EXPECT_LT(trooper->currentHitPoints(), 20);
+}
+
+TEST_F(JaSaberFoes, should_let_a_bolt_through_the_guard_or_absorb_it_by_the_draws) {
+    // given: draws from 0 to d² that come up 0, letting bolts through the guard
+    game.jaSaber().setDefense(3);
+    foes().setRandom(drawing([](int low, int) { return low; }), lowest());
+    addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+
+    // when
+    play(1.5f);
+
+    // then: they went through to the body
+    EXPECT_GE(foes().counts().passedGuard, 1);
+    EXPECT_GE(foes().counts().hitCharacter, 1);
+    EXPECT_EQ(0, foes().counts().sentBack);
+    EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_absorb_a_stopped_bolt_when_the_draw_to_send_it_back_comes_up_0) {
+    // given: the guard's draw, from 0 to 9, comes up 5, stopping the bolt;
+    // the draw to send it back, from 0 to 10, comes up 0
+    game.jaSaber().setDefense(3);
+    foes().setRandom(drawing([](int low, int high) { return high == 9 ? 5 : low; }), lowest());
+    addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+
+    // when
+    play(1.5f);
+
+    // then
+    EXPECT_GE(foes().counts().absorbed, 1);
+    EXPECT_EQ(0, foes().counts().sentBack);
+    EXPECT_EQ(0, foes().counts().hitCharacter);
+    EXPECT_EQ(100, leader->currentHitPoints());
+}
+
+TEST_F(JaSaberFoes, should_not_defend_at_rank_0) {
+    game.jaSaber().setDefense(0);
+    foes().setRandom(drawing([](int, int high) { return high; }), lowest());
+    addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+
+    play(1.5f);
+
+    EXPECT_EQ(0, game.jaSaber().parryCount());
+    EXPECT_EQ(0, foes().counts().sentBack);
+    EXPECT_GE(foes().counts().hitCharacter, 1);
+}
+
+TEST_F(JaSaberFoes, should_parry_an_armed_blow_from_the_front_and_take_one_from_behind) {
+    // given: a vibroblade 1.2 m in front of the leader, in its reach
+    auto front = addFoe("front", glm::vec2(0.0f, 1.2f), kVibroblade);
+
+    // when: it swings
+    play(1.0f);
+
+    // then: the saber parried, and the leader is unhurt
+    EXPECT_GE(foes().counts().swings, 1);
+    EXPECT_GE(foes().counts().blowsParried, 1);
+    EXPECT_GE(game.jaSaber().parryCount(), 1);
+    EXPECT_EQ(0, foes().counts().blowsLanded);
+    EXPECT_EQ(100, leader->currentHitPoints());
+
+    // when: one comes at its back
+    front->clearAllActions();
+    auto back = addFoe("back", glm::vec2(0.0f, -1.2f), kVibroblade);
+    play(1.0f);
+
+    // then: that blow lands
+    EXPECT_GE(foes().counts().blowsLanded, 1);
+    EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_rounds_when_saber_mode_ends) {
+    // given: a blaster's bolts in flight
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
+    auto attack = trooper->getCurrentAction();
+    play(0.6f);
+    ASSERT_GE(foes().counts().bolts, 1);
+
+    // when
+    game.jaSaber().leave();
+
+    // then: the bolts are gone, and the real-time attack ends on its next tick
+    EXPECT_EQ(0u, foes().boltsInFlight());
+    EXPECT_FALSE(foes().fightsInRealTime(*leader));
+    play(1.0f / 60.0f);
+    EXPECT_TRUE(attack->isCompleted());
+}
+
+TEST_F(JaSaberFoes, should_leave_attacks_to_kotors_rounds_when_turned_off) {
+    // given
+    foes().setEnabled(false);
+    addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
+
+    // when: a KOTOR round, whose blow lands 1 s in
+    play(2.0f);
+
+    // then: no volleys of the real-time kind, but KOTOR's own hit
+    EXPECT_EQ(0, foes().counts().volleys);
+    EXPECT_LT(leader->currentHitPoints(), 100);
 }

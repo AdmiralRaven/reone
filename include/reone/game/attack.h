@@ -152,6 +152,9 @@ public:
         Object &target);
 
     size_t attackCount() const { return _attacks.size(); }
+
+    /** How many of the attacks hit (isAttackSuccessful). */
+    size_t successCount() const;
     void prepareMeleeSequence(
         const IAnimations &animations,
         const std::vector<std::string> &attackAnimations);

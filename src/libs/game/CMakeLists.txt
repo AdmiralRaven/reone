@@ -197,6 +197,8 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/jacamera.h
     ${GAME_INCLUDE_DIR}/jaconsole.h
     ${GAME_INCLUDE_DIR}/jacontact.h
+    ${GAME_INCLUDE_DIR}/jadefense.h
+    ${GAME_INCLUDE_DIR}/jafoes.h
     ${GAME_INCLUDE_DIR}/jaretarget.h
     ${GAME_INCLUDE_DIR}/jasaber.h
     ${GAME_INCLUDE_DIR}/jasabermoves.h
@@ -440,6 +442,8 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/jacamera.cpp
     ${GAME_SOURCE_DIR}/jaconsole.cpp
     ${GAME_SOURCE_DIR}/jacontact.cpp
+    ${GAME_SOURCE_DIR}/jadefense.cpp
+    ${GAME_SOURCE_DIR}/jafoes.cpp
     ${GAME_SOURCE_DIR}/jaretarget.cpp
     ${GAME_SOURCE_DIR}/jasaber.cpp
     ${GAME_SOURCE_DIR}/jasabermoves.cpp

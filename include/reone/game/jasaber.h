@@ -22,6 +22,8 @@
 #include "jaanimator.h"
 #include "jacamera.h"
 #include "jacontact.h"
+#include "jadefense.h"
+#include "jafoes.h"
 #include "jasabermoves.h"
 
 namespace reone {
@@ -119,9 +121,15 @@ private:
  * through KOTOR's own damage: a creature that can't block a lightsaber
  * (jaCanBlockSaber) dies to the hit, and one that can, or is too big to cut
  * down (jaTooBigToCut), takes the weapon's damage for an ordinary hit, with
- * no attack roll. The blade is the
- * character's only attack: KOTOR's own are dropped. Blocking, deflection and
- * enemies' real-time attacks are not part of saber mode yet.
+ * no attack roll, and flinches. The blade is the character's only attack:
+ * KOTOR's own are dropped. Each attack and spin plays one of KOTOR's
+ * lightsaber swings, and each hit its lightsaber hit, or its clash on a
+ * creature that can block.
+ *
+ * The character's enemies fight it in real time meanwhile (JaFoes), and its
+ * saber defends it as Jedi Academy's player's does, at a defense rank from 0
+ * to 3 (kJaDefaultDefense): it parries a bolt it sees coming and the blows
+ * of armed enemies, and stops bolts that meet its guard, sending some back.
  */
 class JaSaber : boost::noncopyable {
 public:
@@ -145,7 +153,8 @@ public:
     JaSaber(Game &game, ServicesView &services, IConsole &console) :
         _game(game),
         _services(services),
-        _console(console) {
+        _console(console),
+        _foes(game, services, *this) {
     }
 
     JaLibrary &library() { return _library; }
@@ -273,6 +282,61 @@ public:
     /** How thick the blades cut, in metres: kJaBladeTraceUnits at the body's scale. */
     float bladeRadius() const { return _contacts.bladeRadius(); }
 
+    // Defense, and the enemies that fight in real time
+
+    /** The enemies fighting the character in real time. */
+    JaFoes &foes() { return _foes; }
+    const JaFoes &foes() const { return _foes; }
+
+    /** The character saber mode drives; none while it is off. */
+    std::shared_ptr<Creature> character() const;
+
+    /** Seconds since saber mode last started. */
+    float modeTime() const { return _modeTime; }
+
+    /** Where the view looks, as a facing: where the guard faces. */
+    float viewFacing() const;
+
+    /** The move playing; none while saber mode is off. */
+    const JaSaberMove *currentMove() const;
+
+    /** Metres per JA unit at the character's scale; JA's own rules' distances are scaled by it. */
+    float metresPerUnit() const;
+
+    /** Where the character's eyes are, in world space. */
+    glm::vec3 eye() const;
+
+    /** The character's body as its model was last posed (jaBodyParts). */
+    std::vector<JaBodyPart> bodyParts() const;
+
+    /** How the saber's box stands now: none while the saber shows no blade. */
+    JaGuard guard() const;
+
+    /** The saber's defense rank, from 0, no defense at all, to kJaMaxDefense. */
+    int defense() const { return _defense; }
+    void setDefense(int defense);
+
+    /**
+     * The saber's answer to a bolt coming at \p boltPosition, as JA's bolt
+     * scanner gives it (WP_SaberStartMissileBlockCheck, wp_saber.cpp:7392-7839):
+     * a bolt's parry for where it is, from the ready stance or a parry, with
+     * the saber lit, the attack button up, a defense rank and the last
+     * bolt's parry wait (jaBoltParryDebounceMs) over.
+     *
+     * \return whether a parry starts
+     */
+    bool parryBolt(const glm::vec3 &boltPosition);
+
+    /**
+     * Whether the saber parries a blow from \p attacker meeting the
+     * character at \p point: in a wide guard, with a defense rank, from in
+     * front or the sides (JaFoes::kGuardArc). It plays the blow's parry.
+     */
+    bool parryBlow(const Creature &attacker, const glm::vec3 &point);
+
+    /** How many parries, of bolts and of blows, have started since saber mode last started. */
+    int parryCount() const { return _parryCount; }
+
 private:
     struct Keys {
         bool forward {false};
@@ -315,6 +379,11 @@ private:
     bool _engage {false};
     uint32_t _engaged {0}; /**< the creature engaging goes for */
 
+    int _defense {kJaDefaultDefense};
+    float _boltParryReady {0.0f}; /**< the mode time from which the saber parries the next bolt */
+    int _parryCount {0};
+    JaFoes _foes;
+
     JaSaberInput input() const;
     bool walking() const;
     bool handleKey(const input::KeyEvent &event);
@@ -335,6 +404,8 @@ private:
     bool dropKotorAttacks(Creature &creature);
     /** Applies one of the blade's hits on \p target. */
     void strike(Creature &attacker, Creature &target, const JaSaberHit &hit);
+    /** Plays one of KOTOR's lightsaber sounds, weaponsounds.2da's, at the character. */
+    void saberSound(const std::vector<std::string> &names, const glm::vec3 &point);
     /** Moves saber mode's camera on by \p dt and shows its view. */
     void updateCamera(float dt);
     /** The third-person camera of the area saber mode started in. */

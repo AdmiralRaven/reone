@@ -66,6 +66,7 @@ private:
     AttackSchedule _schedule;
     AttackBuffer _attacks;
     bool _reachedTarget {false};
+    bool _realTime {false}; /**< whether saber mode's real-time foes took the attack over (JaFoes) */
 
     ProjectileSequence _projectiles;
 };

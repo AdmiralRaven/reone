@@ -103,13 +103,14 @@ JaSaberInput holding(bool attack, int forward, int right) {
 } // namespace
 
 TEST(JaSaberMoves, should_build_the_fast_styles_moves_from_their_quadrants) {
-    EXPECT_EQ(64ll, moves().moves().size());
+    // 64 for attacking, and 10 parries: five of blows, five of bolts
+    EXPECT_EQ(74ll, moves().moves().size());
     std::set<std::string> names;
     for (auto &move : moves().moves()) {
         EXPECT_EQ(move.id, moves().find(move.name));
         names.insert(move.name);
     }
-    EXPECT_EQ(64ll, names.size());
+    EXPECT_EQ(74ll, names.size());
 
     const auto &ready = moves().move(moves().ready());
     EXPECT_EQ(std::string("LS_READY"), ready.name);

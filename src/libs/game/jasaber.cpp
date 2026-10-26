@@ -20,6 +20,7 @@
 #include "reone/game/action.h"
 #include "reone/game/attack.h"
 #include "reone/game/console.h"
+#include "reone/game/jafoes.h"
 #include "reone/game/game.h"
 #include "reone/game/object/area.h"
 #include "reone/game/object/camera/thirdperson.h"
@@ -37,6 +38,7 @@
 #include "reone/scene/node/modelnode.h"
 #include "reone/scene/types.h"
 #include "reone/system/logutil.h"
+#include "reone/system/randomutil.h"
 #include "reone/system/stream/fileinput.h"
 
 using namespace reone::graphics;
@@ -248,6 +250,9 @@ void JaSaber::enter() {
     _moveSerial = 0;
     _hitCount = 0;
     _litBlades = -1;
+    _boltParryReady = 0.0f;
+    _parryCount = 0;
+    _foes.reset();
     _active = true;
     showPose();
     _game.setRelativeMouseMode(true);
@@ -264,6 +269,8 @@ void JaSaber::leave(const std::string &reason) {
         print("jasaber: " + reason);
     }
     _active = false;
+    // Enemies go back to KOTOR's rounds; their bolts in flight are gone.
+    _foes.reset();
     if (auto creature = _creature.lock()) {
         creature->setLightsabersOn(false);
         // KOTOR's own animation blends in from the last pose shown.
@@ -639,6 +646,18 @@ void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit
     attack.resolve(attacker, target);
     attack.signal(_game, _services, attacker, target);
     ++_hitCount;
+    // KOTOR's lightsaber hit, or its clash, with sparks, on a weapon that
+    // stands up to it; and one that lives through the hit flinches.
+    if (jaCanBlockSaber(target)) {
+        saberSound({"cb_ls_clash1", "cb_ls_clash2"}, hit.point);
+        _foes.playFlash("v_parrspr_imp", hit.point);
+    } else {
+        saberSound({"cb_ls_hitsoft1", "cb_ls_hitsoft2"}, hit.point);
+    }
+    if (!target.isDead()) {
+        target.playAnimation(CombatAnimation::Damage, target.getWieldType(), 1);
+        target.playSound(randomInt(0, 1) == 0 ? resource::SoundSetEntry::PainGrunt1 : resource::SoundSetEntry::PainGrunt2);
+    }
     info(str(boost::format("jasaber: hit %s (%s, %s) in %s at %.3f s: %d hit points left%s") %
              target.tag() % jaBodyRegionName(hit.region) % standing %
              moveName() % _modeTime % target.currentHitPoints() % (target.isDead() ? ", dead" : "")));
@@ -702,7 +721,14 @@ bool JaSaber::update(float dt) {
     _moveSerial += static_cast<int>(step.started.size());
     const auto &moves = _driver->machine().moves();
     for (int id : step.started) {
-        info(str(boost::format("jasaber: %s (%s) at %.3f s") % moves.move(id).name % moves.move(id).clip % _modeTime));
+        const auto &move = moves.move(id);
+        info(str(boost::format("jasaber: %s (%s) at %.3f s") % move.name % move.clip % _modeTime));
+        // KOTOR's lightsaber swings (weaponsounds.2da): a spin twirls.
+        if (move.spin) {
+            saberSound({"cb_ls_twirl1", "cb_ls_twirl2"}, creature->position());
+        } else if (move.kind == JaMoveKind::Attack) {
+            saberSound({"cb_ls_swingshrt1", "cb_ls_swingshrt2", "cb_ls_swingshrt3"}, creature->position());
+        }
     }
 
     // The character faces the camera, its legs turned toward the movement.
@@ -723,6 +749,8 @@ bool JaSaber::update(float dt) {
     showPose();
     // Where the character now stands, with the pose it now shows.
     updateContacts(creature);
+    // The bolts in flight, against the guard and the body as they now stand.
+    _foes.update(dt);
     // After the move, so the camera sees where the character is now.
     updateCamera(dt);
     return true;
@@ -736,6 +764,96 @@ void JaSaber::showPose() {
         properties.scale = 1.0f;
         _model->playAnimation(_body->livePose->animation(), nullptr, properties);
     }
+}
+
+void JaSaber::saberSound(const std::vector<std::string> &names, const glm::vec3 &point) {
+    if (!names.empty()) {
+        _foes.playSound(names[static_cast<size_t>(randomInt(0, static_cast<int>(names.size()) - 1))], point);
+    }
+}
+
+std::shared_ptr<Creature> JaSaber::character() const {
+    return _active ? _creature.lock() : nullptr;
+}
+
+float JaSaber::viewFacing() const {
+    if (auto *camera = thirdPersonCamera()) {
+        return camera->facing();
+    }
+    auto creature = _creature.lock();
+    return creature ? creature->getFacing() : 0.0f;
+}
+
+const JaSaberMove *JaSaber::currentMove() const {
+    if (!_active || !_driver) {
+        return nullptr;
+    }
+    const auto &machine = _driver->machine();
+    return &machine.moves().move(machine.move());
+}
+
+float JaSaber::metresPerUnit() const {
+    if (_body && _body->retargeter) {
+        return _body->retargeter->scale();
+    }
+    return kJaBladeRadius / kJaBladeTraceUnits;
+}
+
+glm::vec3 JaSaber::eye() const {
+    auto creature = _creature.lock();
+    if (!creature || !_model) {
+        return glm::vec3(0.0f);
+    }
+    return creature->position() + glm::vec3(0.0f, 0.0f, eyeHeight(*_model));
+}
+
+std::vector<JaBodyPart> JaSaber::bodyParts() const {
+    if (!_active || !_model) {
+        return {};
+    }
+    return jaBodyParts(*_model);
+}
+
+JaGuard JaSaber::guard() const {
+    const JaSaberMove *move = currentMove();
+    if (!move || _litBlades <= 0 || _defense < 1) {
+        return JaGuard::None;
+    }
+    return jaGuardOf(*move);
+}
+
+void JaSaber::setDefense(int defense) {
+    _defense = glm::clamp(defense, 0, kJaMaxDefense);
+    print(str(boost::format("jasaber: saber defense rank %d%s") % _defense % (_defense == 0 ? ", no defense" : "")));
+}
+
+bool JaSaber::parryBolt(const glm::vec3 &boltPosition) {
+    if (!_active || !_driver || _defense < 1 || _litBlades <= 0 || input().attack || _modeTime < _boltParryReady ||
+        !_driver->machine().canBlock()) {
+        return false;
+    }
+    JaBlock block = jaBlockAt(boltPosition, eye(), viewFacing(), metresPerUnit());
+    int move = _driver->machine().moves().reflect(block);
+    if (!_driver->block(move, jaParryWeaponTimeMs(_defense))) {
+        return false;
+    }
+    _boltParryReady = _modeTime + static_cast<float>(jaBoltParryDebounceMs(_defense)) / 1000.0f;
+    ++_parryCount;
+    info(str(boost::format("jasaber: the saber sees a bolt coming, %s, at %.3f s") % jaBlockName(block) % _modeTime));
+    return true;
+}
+
+bool JaSaber::parryBlow(const Creature &attacker, const glm::vec3 &point) {
+    auto creature = character();
+    if (!creature || guard() != JaGuard::Wide ||
+        !jaInFrontLevel(attacker.position(), creature->position(), viewFacing(), JaFoes::kGuardArc)) {
+        return false;
+    }
+    JaBlock block = jaBlockAt(point, eye(), viewFacing(), metresPerUnit());
+    if (_driver->block(_driver->machine().moves().parry(block), jaParryWeaponTimeMs(_defense))) {
+        ++_parryCount;
+    }
+    return true;
 }
 
 void JaSaber::updateFrame() {

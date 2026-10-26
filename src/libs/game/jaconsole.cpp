@@ -81,6 +81,8 @@ public:
     void fight(const ConsoleArgs &args);
     void use(const ConsoleArgs &args);
     void hitPoints(const ConsoleArgs &args);
+    void defense(const ConsoleArgs &args);
+    void enemies(const ConsoleArgs &args);
 
 private:
     Game &_game;
@@ -444,6 +446,36 @@ void JaConsole::creature(const ConsoleArgs &args) {
     }
 }
 
+void JaConsole::defense(const ConsoleArgs &args) {
+    if (args.size() == 1) {
+        print(str(boost::format("jadefense: saber defense rank %d") % saberControl().defense()));
+        return;
+    }
+    auto rank = args.get<int>(1);
+    if (args.size() != 2 || !rank || *rank < 0 || *rank > kJaMaxDefense) {
+        throw std::runtime_error("Usage: jadefense [0-3]");
+    }
+    saberControl().setDefense(*rank);
+}
+
+void JaConsole::enemies(const ConsoleArgs &args) {
+    auto &foes = saberControl().foes();
+    if (args.size() == 2 && (boost::iequals(std::string(*args[1]), "on") || boost::iequals(std::string(*args[1]), "off"))) {
+        foes.setEnabled(boost::iequals(std::string(*args[1]), "on"));
+    } else if (args.size() != 1) {
+        throw std::runtime_error("Usage: jaenemies [on|off]");
+    }
+    // What the real-time enemies did since saber mode last started, for a
+    // scripted run to judge by.
+    const auto &c = foes.counts();
+    print(str(boost::format("jaenemies: %s; %d %s, %d %s (%d aimed): %d sent back, %d stopped, %d through the guard, "
+                            "%d hit the character, %d hit enemies; %d %s: %d parried, %d hit, %d missed") %
+              (foes.enabled() ? "enemies fight saber mode in real time" : "enemies fight by KOTOR's rounds") %
+              c.volleys % (c.volleys == 1 ? "volley" : "volleys") % c.bolts % (c.bolts == 1 ? "bolt" : "bolts") % c.aimed %
+              c.sentBack % c.absorbed % c.passedGuard % c.hitCharacter % c.hitEnemies %
+              c.swings % (c.swings == 1 ? "swing" : "swings") % c.blowsParried % c.blowsLanded % c.blowsMissed));
+}
+
 void JaConsole::turn(const ConsoleArgs &args) {
     auto degrees = args.get<float>(1);
     if (args.size() != 2 || !degrees) {
@@ -766,6 +798,10 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jafight", &JaConsole::fight));
     console.registerCommand("jause", "use a healing item on the party leader, as a click on the action bar's slot does: jause <item tag>",
                             logged("jause", &JaConsole::use));
+    console.registerCommand("jadefense", "show or set saber mode's defense rank, from 0, none, to 3: jadefense [0-3]",
+                            logged("jadefense", &JaConsole::defense));
+    console.registerCommand("jaenemies", "show what real-time enemies did, or turn them on or off: jaenemies [on|off]",
+                            logged("jaenemies", &JaConsole::enemies));
     console.registerCommand("jahitpoints", "set the party leader's hit points, without the scripts damage runs: jahitpoints <points>",
                             logged("jahitpoints", &JaConsole::hitPoints));
 }

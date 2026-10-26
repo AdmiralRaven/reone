@@ -153,7 +153,7 @@ TEST(JaConsole, should_register_the_commands) {
     registerJaConsoleCommands(game, console);
 
     for (auto name : {"jaload", "jaloadsave", "japlay", "jasaber", "jacam", "jalist", "jaengage",
-                      "jastatus", "jacreature", "jafight", "jause", "jahitpoints"}) {
+                      "jastatus", "jacreature", "jafight", "jause", "jahitpoints", "jadefense", "jaenemies"}) {
         EXPECT_TRUE(console.hasCommand(name)) << name;
     }
 }
@@ -305,4 +305,33 @@ TEST(JaConsole, should_explain_what_is_missing) {
     // Without a game, turning engaging off has no enemies to report.
     console.execute("jaengage", {"off"});
     EXPECT_EQ(std::string("jaengage: off, the keyboard and mouse again"), lastLine(console));
+
+    EXPECT_NE(std::string::npos, failure(console, "jadefense", {"4"}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jadefense", {"-1"}).find("Usage"));
+    EXPECT_NE(std::string::npos, failure(console, "jaenemies", {"maybe"}).find("Usage"));
+}
+
+TEST(JaConsole, should_show_and_set_the_defense_rank_and_the_real_time_enemies) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
+    registerJaConsoleCommands(game, console);
+
+    console.execute("jadefense", {});
+    EXPECT_EQ(std::string("jadefense: saber defense rank 2"), lastLine(console));
+    console.execute("jadefense", {"3"});
+    EXPECT_EQ(std::string("jasaber: saber defense rank 3"), lastLine(console));
+    EXPECT_EQ(3, game.jaSaber().defense());
+    console.execute("jadefense", {"0"});
+    EXPECT_EQ(std::string("jasaber: saber defense rank 0, no defense"), lastLine(console));
+
+    console.execute("jaenemies", {});
+    EXPECT_EQ(std::string("jaenemies: enemies fight saber mode in real time; 0 volleys, 0 bolts (0 aimed): 0 sent back, "
+                          "0 stopped, 0 through the guard, 0 hit the character, 0 hit enemies; 0 swings: 0 parried, 0 hit, 0 missed"),
+              lastLine(console));
+    console.execute("jaenemies", {"off"});
+    EXPECT_FALSE(game.jaSaber().foes().enabled());
+    EXPECT_NE(std::string::npos, lastLine(console).find("enemies fight by KOTOR's rounds"));
+    console.execute("jaenemies", {"on"});
+    EXPECT_TRUE(game.jaSaber().foes().enabled());
 }

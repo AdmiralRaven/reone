@@ -22,6 +22,7 @@
 #include "reone/game/combat.h"
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/object/creature.h"
 #include "reone/game/projectiles.h"
 #include "reone/scene/graphs.h"
@@ -144,6 +145,36 @@ static std::vector<std::string> attack(
 }
 
 /**
+ * KOTOR's animation for one attack on \p target, outside a duel, as attack()
+ * picks it: for a real-time attack in saber mode (JaFoes).
+ */
+static std::string realTimeAttackAnim(Creature &attacker, Creature &target) {
+    CreatureWieldType targetWield = target.getWieldType();
+    int variant = randomInt(1, 5);
+    CreatureWieldType attackerWield = attacker.getWieldType();
+    switch (attackerWield) {
+    case CreatureWieldType::None:
+        // A creature's own attack, as Creature::getAnimationName has it for MeleeAttack.
+        return "m0a1";
+    case CreatureWieldType::SingleSword:
+    case CreatureWieldType::DoubleBladedSword:
+    case CreatureWieldType::DualSwords:
+        return getMeleeAttackAnim(attackerWield, targetWield, variant, false);
+    case CreatureWieldType::BlasterPistol:
+    case CreatureWieldType::DualPistols:
+    case CreatureWieldType::BlasterRifle:
+    case CreatureWieldType::HeavyWeapon:
+        return getRangedAttackAnim(attacker, /*kind=*/1);
+    case CreatureWieldType::HandToHand:
+    case CreatureWieldType::HandToHandComplex:
+        return getUnarmedAttackAnim(attackerWield, targetWield, variant, false);
+    case CreatureWieldType::StunBaton:
+        return getStunBatonAttackAnim(variant);
+    }
+    return std::string();
+}
+
+/**
  * Add projectiles matching the corresponding attack animation.
  */
 void AttackObjectAction::addProjectiles(const Creature &creature) {
@@ -173,6 +204,40 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
     attacker.setAttemptedAttackTarget(target->id());
 
     if (target->isDead() && !_attacks.hasPendingMelee()) {
+        finish(attacker);
+        return;
+    }
+
+    // In saber mode, an attack on its character goes in real time.
+    auto &foes = _game.jaSaber().foes();
+    auto *targetCreature = dyn_cast<Creature>(target.get());
+    if (targetCreature && foes.fightsInRealTime(*targetCreature)) {
+        if (!_realTime) {
+            // What KOTOR's round had begun is dropped: the real-time attack decides.
+            _realTime = true;
+            _attacks.discardPendingMelee();
+            _projectiles.reset();
+            attacker.setMovementRestricted(false);
+        }
+        bool busy = foes.busy(attacker);
+        if (!busy && _reachedTarget &&
+            attacker.getDistanceTo(*target) > attacker.getAttackRange() + JaFoes::kReachSlack) {
+            // The character moved away: after it again.
+            _reachedTarget = false;
+        }
+        if (!busy && !navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
+            return;
+        }
+        attacker.face(*target);
+        JaFoeAttack kind;
+        kind.animation = realTimeAttackAnim;
+        if (foes.attack(self, attacker, *targetCreature, kind, dt) == JaFoes::Step::Finished) {
+            finish(attacker);
+        }
+        return;
+    }
+    if (_realTime) {
+        // Saber mode ended mid-attack: KOTOR's rounds take over afresh.
         finish(attacker);
         return;
     }

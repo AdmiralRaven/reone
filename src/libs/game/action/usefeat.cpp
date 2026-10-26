@@ -22,6 +22,7 @@
 #include "reone/game/combat.h"
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/object.h"
 #include "reone/game/projectiles.h"
 #include "reone/scene/graphs.h"
@@ -167,6 +168,40 @@ void UseFeatAction::execute(std::shared_ptr<Action> self, Object &actor, float d
     }
 
     if (target->isDead() && !_attacks.hasPendingMelee()) {
+        finish(attacker);
+        return;
+    }
+
+    // In saber mode, a combat feat on its character goes in real time.
+    auto &foes = _game.jaSaber().foes();
+    auto *targetCreature = dyn_cast<Creature>(target.get());
+    if (isPhysicalAttackFeat(_feat) && targetCreature && foes.fightsInRealTime(*targetCreature)) {
+        if (!_realTime) {
+            _realTime = true;
+            _attacks.discardPendingMelee();
+            _projectiles.reset();
+            attacker.setMovementRestricted(false);
+        }
+        bool busy = foes.busy(attacker);
+        if (!busy && _reachedTarget &&
+            attacker.getDistanceTo(*target) > attacker.getAttackRange() + JaFoes::kReachSlack) {
+            _reachedTarget = false;
+        }
+        if (!busy && !navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
+            return;
+        }
+        attacker.face(*target);
+        JaFoeAttack kind;
+        kind.feat = _feat;
+        kind.projectiles = getProjectileType(_feat).value_or(ProjectileAttackType::Basic);
+        FeatType feat = _feat;
+        kind.animation = [feat](Creature &attacker, Creature &) { return getAttackAnim(feat, attacker.getWieldType()); };
+        if (foes.attack(self, attacker, *targetCreature, kind, dt) == JaFoes::Step::Finished) {
+            finish(attacker);
+        }
+        return;
+    }
+    if (_realTime) {
         finish(attacker);
         return;
     }
