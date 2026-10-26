@@ -199,7 +199,7 @@ public:
         int rejected {0};     /**< datagrams that weren't this protocol's, or came from elsewhere */
         int unknown {0};      /**< creature states for IDs this side doesn't have */
         int stale {0};        /**< snapshots older than one applied */
-        int held {0};         /**< the guest's states the host held off while in a conversation */
+        int held {0};         /**< the guest's states and hits the host held off while in a conversation, or hits while not in play */
     };
     const Counts &counts() const { return _counts; }
 
@@ -221,9 +221,11 @@ private:
     float _sinceSend {0.0f};
     float _sinceHello {0.0f};
     bool _holding {false};
+    double _holdUntil {0.0};
+    bool _warnedNoHero {false};
     std::set<uint32_t> _unknownIds;
     std::optional<bool> _manifestsMatch;
-    bool _helloAnswered {false};
+    NetSocket::Address _refused; /**< the last side refused for playing another member, warned of once */
     Counts _counts;
     std::function<double()> _clock;
 

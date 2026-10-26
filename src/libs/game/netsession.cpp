@@ -98,6 +98,7 @@ constexpr uint8_t kMagic[] {'R', 'N', 'E', 'T'};
 constexpr size_t kHeaderSize = 4 + 2 + 1 + 4;
 constexpr float kHelloInterval = 0.5f;
 constexpr float kManifestInterval = 2.0f;
+constexpr double kHoldAfterConversation = 1.0;
 constexpr size_t kMaxDatagram = 1400;
 
 // Little-endian writing and reading.
@@ -436,6 +437,8 @@ void NetSession::host(uint16_t port, int guestNpc) {
     _socket.open(port);
     _role = NetRole::Host;
     _lastHeard = now();
+    // The host plays the PC, whichever member the save had leading.
+    _game.party().setPartyLeader(kNpcPlayer);
     _game.party().setLeaderLocked(true);
     info(str(boost::format("net: hosting on UDP port %d for a guest playing party member %d (%s); objects %016x") %
              _socket.localPort() % guestNpc % guestHero()->tag() % manifestHash()));
@@ -478,7 +481,7 @@ void NetSession::stop(const std::string &reason) {
     _game.party().setLeaderLocked(false);
     if (_role == NetRole::Guest) {
         _game.setFollowingHost(false);
-        // The PC leads again, as before the session.
+        // The PC leads again.
         if (_game.module() && _game.module()->area()) {
             _game.party().setPartyLeader(kNpcPlayer);
         }
@@ -488,13 +491,15 @@ void NetSession::stop(const std::string &reason) {
     _role = NetRole::None;
     _connected = false;
     _manifestsMatch.reset();
-    _helloAnswered = false;
+    _refused = NetSocket::Address();
     _sequence = 0;
     _lastReceived = 0;
     _sinceSend = 0.0f;
     _sinceHello = 0.0f;
     _lastUpdate = 0.0;
     _holding = false;
+    _holdUntil = 0.0;
+    _warnedNoHero = false;
     _unknownIds.clear();
     _counts = Counts();
 }
@@ -605,7 +610,6 @@ void NetSession::update() {
     if (_connected && time - _lastHeard > kTimeout) {
         info(str(boost::format("net: nothing from %s for %.0f s") % _peer.str() % kTimeout));
         _connected = false;
-        _helloAnswered = false;
     }
 
     _sinceSend += elapsed;
@@ -647,18 +651,17 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         ++_counts.rejected;
         return;
     }
-    if (_role == NetRole::Host && type == MessageType::Hello && datagram.from != _peer) {
-        // A guest, new or come back.
-        _peer = datagram.from;
-        _lastReceived = 0;
-        _connected = false;
-    }
-    if (datagram.from != _peer) {
+    // A hello to the host from elsewhere: a guest, new or come back. It is
+    // taken only once it checks out, so that a stray one cuts no one off.
+    bool newGuest = _role == NetRole::Host && type == MessageType::Hello && datagram.from != _peer;
+    if (datagram.from != _peer && !newGuest) {
         ++_counts.rejected;
         return;
     }
-    ++_counts.received;
-    _lastHeard = now();
+    if (!newGuest) {
+        ++_counts.received;
+        _lastHeard = now();
+    }
 
     switch (type) {
     case MessageType::Hello: {
@@ -673,11 +676,19 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         if (npc != _guestNpc) {
             // Both sides would drive different heroes, and neither the other's.
             ++_counts.rejected;
-            if (!_connected) {
+            if (_refused != datagram.from) {
+                _refused = datagram.from;
                 warn(str(boost::format("net: %s %s plays party member %d, not %d as this side; start both with the same one") %
-                         roleName(role) % _peer.str() % npc % _guestNpc));
+                         roleName(role) % datagram.from.str() % npc % _guestNpc));
             }
             return;
+        }
+        if (newGuest) {
+            _peer = datagram.from;
+            _lastReceived = 0;
+            _connected = false;
+            ++_counts.received;
+            _lastHeard = now();
         }
         uint64_t mine = manifestHash();
         bool match = manifest == mine;
@@ -699,8 +710,6 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         if (_role == NetRole::Host) {
             // Answer each hello, so a guest knows it is heard.
             sendHello();
-        } else {
-            _helloAnswered = true;
         }
         break;
     }
@@ -735,6 +744,10 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         _lastReceived = sequence;
         auto state = readState(in);
         auto hero = guestHero();
+        if (in.ok() && !hero && !_warnedNoHero) {
+            _warnedNoHero = true;
+            warn(str(boost::format("net: party member %d, the guest's hero, isn't in the host's party now") % _guestNpc));
+        }
         if (!in.ok() || !hero || state.id != hero->id()) {
             ++_counts.rejected;
             if (in.ok() && hero && _counts.rejected == 1) {
@@ -744,14 +757,19 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             return;
         }
         // In a conversation, KOTOR's scene may move the hero, and waits for
-        // its actions: the guest's place waits until it ends.
-        bool talking = _game.currentScreen() == Game::Screen::Conversation;
-        if (talking != _holding) {
-            _holding = talking;
-            info(talking ? "net: the host is in a conversation; the guest's hero stays as the scene has it"
+        // its actions: the guest's place waits until a second after it ends,
+        // for what the conversation's last script gives the hero to do.
+        double time = now();
+        if (_game.currentScreen() == Game::Screen::Conversation) {
+            _holdUntil = time + kHoldAfterConversation;
+        }
+        bool holding = time < _holdUntil;
+        if (holding != _holding) {
+            _holding = holding;
+            info(holding ? "net: the host is in a conversation; the guest's hero stays as the scene has it"
                          : "net: the conversation is over; the guest's hero goes where the guest has it");
         }
-        if (talking) {
+        if (holding) {
             ++_counts.held;
             return;
         }
@@ -833,6 +851,11 @@ void NetSession::applyHit(uint32_t targetId, JaBodyRegion region) {
     auto module = _game.module();
     if (!hero || hero->isDead() || !target || target->isDead() || !module || jaSparedBySaber(*target) || !module->isHostileToPartyLeader(*target)) {
         ++_counts.rejected;
+        return;
+    }
+    if (_game.currentScreen() != Game::Screen::InGame || now() < _holdUntil) {
+        // Not in play on the host: in a conversation, its menu or paused.
+        ++_counts.held;
         return;
     }
     // Saber mode's rule, from the host (JaSaber::strike).

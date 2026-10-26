@@ -73,6 +73,8 @@ struct Side {
         area->add(pc);
         area->add(companion);
         area->add(enemy);
+        // In play: the host applies the guest's hits only then.
+        game.openInGame();
     }
 
     NetSession &net() { return game.netSession(); }
@@ -377,8 +379,6 @@ TEST_F(NetSessionTest, should_bring_back_a_creature_the_host_has_alive_again) {
 
 TEST_F(NetSessionTest, should_run_from_each_games_own_loop) {
     // given
-    host.game.openInGame();
-    guest.game.openInGame();
     host.net().host(0, 0);
     hostPort = host.net().localPort();
     guest.net().join("127.0.0.1", hostPort, 0);
@@ -396,4 +396,61 @@ TEST_F(NetSessionTest, should_run_from_each_games_own_loop) {
     EXPECT_TRUE(guest.net().connected());
     EXPECT_NEAR(2.0f, guest.pc->position().x, 1e-5f);
     EXPECT_NEAR(3.0f, guest.pc->position().y, 1e-5f);
+}
+
+TEST_F(NetSessionTest, should_have_the_hosts_pc_lead_whichever_member_the_save_had_leading) {
+    // given: a save with the companion leading on the host
+    host.game.party().setPartyLeader(0);
+    ASSERT_EQ(host.companion, host.game.party().getLeader());
+
+    // when
+    host.net().host(0, 0);
+
+    // then: the host plays the PC, and the guest the companion
+    EXPECT_EQ(host.pc, host.game.party().getLeader());
+}
+
+TEST_F(NetSessionTest, should_keep_its_guest_when_a_stray_hello_comes_from_elsewhere) {
+    // given: joined
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    ASSERT_TRUE(host.net().connected());
+
+    // when: hellos from another socket, one too short and one with another member
+    NetSocket stray;
+    stray.open(0);
+    auto to = NetSocket::resolve("127.0.0.1", hostPort);
+    ASSERT_TRUE(to);
+    std::vector<uint8_t> shortHello {'R', 'N', 'E', 'T', 1, 0, 1, 1, 0, 0, 0};
+    stray.send(*to, shortHello);
+    std::vector<uint8_t> otherMember(shortHello);
+    otherMember.push_back(static_cast<uint8_t>(NetRole::Guest));
+    for (uint8_t byte : {5, 0, 0, 0}) {
+        otherMember.push_back(byte);
+    }
+    for (int i = 0; i < 12; ++i) {
+        otherMember.push_back(0);
+    }
+    stray.send(*to, otherMember);
+    guest.companion->setPosition(glm::vec3(-4.0f, 2.0f, 0.0f));
+    exchange(12);
+
+    // then: the host still has its guest, and shows its hero where it went
+    EXPECT_TRUE(host.net().connected());
+    EXPECT_GE(host.net().counts().rejected, 2);
+    EXPECT_NEAR(-4.0f, host.companion->position().x, 1e-5f);
+}
+
+TEST_F(NetSessionTest, should_end_the_session_when_a_save_loads_or_the_main_menu_opens) {
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+
+    guest.game.openMainMenu();
+
+    EXPECT_EQ(NetRole::None, guest.net().role());
+    EXPECT_FALSE(guest.game.followingHost());
+    EXPECT_FALSE(guest.game.party().leaderLocked());
 }

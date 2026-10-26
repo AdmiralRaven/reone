@@ -1811,6 +1811,10 @@ bool Game::loadGame(const resource::SaveSlotDescriptor &slot) {
     // throw here leaves the current session and its mounts untouched, so the
     // player keeps playing instead of being left with nothing to render.
     auto prepared = prepareSaveLoad(slot);
+    // A two-player session doesn't outlive the game it shared.
+    if (_netSession && _netSession->role() != NetRole::None) {
+        _netSession->stop("a save is loading");
+    }
 
     try {
         // Commit. The old runtime and the old mounts retire together, and only
@@ -4072,6 +4076,9 @@ void Game::retireToMainMenu() {
 }
 
 void Game::openMainMenu() {
+    if (_netSession && _netSession->role() != NetRole::None) {
+        _netSession->stop("back to the main menu");
+    }
     // Only a committed playable session may replace the durable menu snapshot.
     // Cold startup and recovery from a partial load must not erase it.
     if (isTSL() && _runtimeSessionPlayable) {
