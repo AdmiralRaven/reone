@@ -1017,10 +1017,10 @@ protected:
         return item;
     }
 
-    // A hostile creature with \p baseItem in hand at \p at, whose attacks
-    // always hit, attacking the leader.
-    std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, int baseItem) {
-        auto foe = addCreature(tag, at, 1.0f, true, std::nullopt, weapon(baseItem));
+    // A hostile creature with \p baseItem in hand at \p at, or none, whose
+    // attacks always hit, attacking the leader.
+    std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, std::optional<int> baseItem) {
+        auto foe = addCreature(tag, at, 1.0f, true, std::nullopt, baseItem ? weapon(*baseItem) : nullptr);
         foe->applyAssuredHit();
         foe->addAction(game.newAction<AttackObjectAction>(leader));
         return foe;
@@ -1145,6 +1145,38 @@ TEST_F(JaSaberFoes, should_parry_an_armed_blow_from_the_front_and_take_one_from_
     // then: that blow lands
     EXPECT_GE(foes().counts().blowsLanded, 1);
     EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_take_a_blow_from_fists_or_claws_even_in_front) {
+    // given: an enemy with no weapon in the leader's reach, in front
+    addFoe("brawler", glm::vec2(0.0f, 1.2f), std::nullopt);
+
+    // when
+    play(1.0f);
+
+    // then: the saber doesn't parry it, as Jedi Academy's doesn't parry a punch
+    EXPECT_GE(foes().counts().swings, 1);
+    EXPECT_EQ(0, foes().counts().blowsParried);
+    EXPECT_GE(foes().counts().blowsLanded, 1);
+    EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_send_a_bolt_back_through_a_friend_into_the_shooter) {
+    // given: a blaster 6 m in front, with a creature of the leader's side
+    // halfway, on the bolt's line, and draws that send every bolt back
+    game.jaSaber().setDefense(3);
+    foes().setRandom(drawing([](int, int high) { return high; }), lowest());
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+    auto friendly = addCreature("friendly", glm::vec2(0.0f, 3.0f), 1.0f, false);
+
+    // when
+    play(2.0f);
+
+    // then: the bolts passed the friend both ways, and hit the trooper
+    EXPECT_GE(foes().counts().sentBack, 1);
+    EXPECT_GE(foes().counts().hitEnemies, 1);
+    EXPECT_EQ(20, friendly->currentHitPoints());
+    EXPECT_LT(trooper->currentHitPoints(), 20);
 }
 
 TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_rounds_when_saber_mode_ends) {
