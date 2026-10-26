@@ -680,8 +680,14 @@ protected:
     // one upright capsule half as round, 3 m tall. It is of \p faction, or
     // else hostile_1 when hostile and neutral when not.
     std::shared_ptr<Creature> addCreature(const std::string &tag, const glm::vec2 &at, float width, bool isHostile,
-                                          std::optional<Faction> faction = std::nullopt) {
+                                          std::optional<Faction> faction = std::nullopt,
+                                          std::shared_ptr<Item> weapon = nullptr) {
         auto creature = game.newCreature();
+        // Equipped before it has a model, which equipping would rebuild from
+        // KOTOR's appearance table.
+        if (weapon) {
+            EXPECT_TRUE(creature->equip(InventorySlots::rightWeapon, weapon));
+        }
         creature->setTag(tag);
         creature->setFaction(faction.value_or(isHostile ? Faction::Hostile1 : Faction::Neutral));
         creature->setMaxHitPoints(20);
@@ -1014,8 +1020,7 @@ protected:
     // A hostile creature with \p baseItem in hand at \p at, whose attacks
     // always hit, attacking the leader.
     std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, int baseItem) {
-        auto foe = addCreature(tag, at, 1.0f, true);
-        EXPECT_TRUE(foe->equip(InventorySlots::rightWeapon, weapon(baseItem)));
+        auto foe = addCreature(tag, at, 1.0f, true, std::nullopt, weapon(baseItem));
         foe->applyAssuredHit();
         foe->addAction(game.newAction<AttackObjectAction>(leader));
         return foe;

@@ -20,6 +20,8 @@
 #include "reone/audio/di/services.h"
 #include "reone/audio/mixer.h"
 #include "reone/game/action.h"
+#include "reone/game/action/attackobject.h"
+#include "reone/game/action/usefeat.h"
 #include "reone/game/animations.h"
 #include "reone/game/combat.h"
 #include "reone/game/di/services.h"
@@ -40,6 +42,7 @@
 #include "reone/scene/graphs.h"
 #include "reone/scene/node/model.h"
 #include "reone/scene/types.h"
+#include "reone/system/cast.h"
 #include "reone/system/logutil.h"
 
 using namespace reone::graphics;
@@ -140,6 +143,22 @@ float animationLength(const Creature &creature, const std::string &name) {
     }
     auto animation = model->model().getAnimation(name);
     return animation ? animation->length() : 0.0f;
+}
+
+// Whether \p attacker's current action is an attack on \p target, which
+// JaFoes takes over: an attack's or a combat feat's.
+bool attacking(const Creature &attacker, const Creature &target) {
+    auto action = attacker.getCurrentAction();
+    if (!action || action->isCompleted() || action->isCancelled()) {
+        return false;
+    }
+    std::shared_ptr<Object> aimedAt;
+    if (auto *attack = dyn_cast<AttackObjectAction>(action.get())) {
+        aimedAt = attack->target();
+    } else if (auto *feat = dyn_cast<UseFeatAction>(action.get())) {
+        aimedAt = feat->target();
+    }
+    return aimedAt.get() == &target;
 }
 
 bool armed(const Creature &creature) {
@@ -458,22 +477,28 @@ void JaFoes::strike(Foe &foe, Creature &attacker, Creature &target) {
     }
     foe.blow->signal(_game, _services, attacker, target);
     ++_counts.blowsLanded;
-    target.playSound(_random(0, 1) == 0 ? SoundSetEntry::PainGrunt1 : SoundSetEntry::PainGrunt2);
+    if (!target.isDead()) {
+        target.playSound(_random(0, 1) == 0 ? SoundSetEntry::PainGrunt1 : SoundSetEntry::PainGrunt2);
+    }
     log(str(boost::format("jasaber: %s's blow hits %s at %.3f s: %d hit points left%s") %
             attacker.tag() % target.tag() % timeNow() % target.currentHitPoints() % (target.isDead() ? ", dead" : "")));
 }
 
 void JaFoes::update(float dt) {
-    // A volley or a swing whose action is gone, as when KOTOR's AI moved on,
-    // ends: it lets the attacker move again.
+    // A volley or a swing whose action is gone ends, and lets the attacker
+    // move again, unless KOTOR's AI put another attack on the character in
+    // its place, as at a round's end, which takes it up.
+    auto character = _saber.character();
     for (auto &[id, foe] : _foes) {
         auto action = foe.action.lock();
-        if (foe.phase != Foe::Phase::Idle && (!action || action->isCompleted() || action->isCancelled())) {
-            if (auto attacker = _game.getObjectById<Creature>(id)) {
-                rest(foe, *attacker, 0.0f, 0.0f);
-            } else {
-                foe.phase = Foe::Phase::Idle;
-            }
+        if (foe.phase == Foe::Phase::Idle || (action && !action->isCompleted() && !action->isCancelled())) {
+            continue;
+        }
+        auto attacker = _game.getObjectById<Creature>(id);
+        if (!attacker) {
+            foe.phase = Foe::Phase::Idle;
+        } else if (!character || !attacking(*attacker, *character)) {
+            rest(foe, *attacker, 0.0f, 0.0f);
         }
     }
     for (auto it = _flashes.begin(); it != _flashes.end();) {
