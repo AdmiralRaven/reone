@@ -209,6 +209,10 @@ SaveEligibilityReason Game::saveEligibility(bool requireStablePoint) const {
 }
 
 SaveResult Game::requestSave(SaveRequest request) {
+    if (_followingHost) {
+        return {SaveStatus::NotAllowed, SaveEligibilityReason::None,
+                SaveSlotPublishError::None, "A two-player session's guest doesn't save; the host does"};
+    }
     if (request.kind == SaveKind::Quick) {
         request.slot = kQuickSaveSlot;
         request.displayName = "QUICKSAVE";

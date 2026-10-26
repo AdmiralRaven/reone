@@ -126,6 +126,7 @@ struct SerializedScriptSituation;
 class SavedScriptContinuation;
 class ModuleSnapshotBuilder;
 class JaSaber;
+class NetSession;
 
 class Game : boost::noncopyable {
 public:
@@ -201,6 +202,19 @@ public:
 
     /** Jedi Academy saber mode and the JA animations it plays. */
     JaSaber &jaSaber();
+
+    /** The two-player session (#39's spike); none runs until nethost or netjoin. */
+    NetSession &netSession();
+
+    /**
+     * Whether this process follows a host's game, as a session's guest: it
+     * runs no scripts, combat rounds, saves or area changes of its own.
+     */
+    bool followingHost() const { return _followingHost; }
+    void setFollowingHost(bool following);
+
+    /** Whether the game goes on with its window out of focus: while a two-player session runs. */
+    bool keepsRunningUnfocused() const;
     Combat &combat() { return _combat; }
     Journal &journal() { return _journal; }
     MessageLog &messageLog() { return _messageLog; }
@@ -879,6 +893,8 @@ private:
     std::queue<std::string> _moduleTransitionMovies;
     std::shared_ptr<PresentationPointer> _pointer;
     std::shared_ptr<JaSaber> _jaSaber;
+    std::shared_ptr<NetSession> _netSession;
+    bool _followingHost {false};
     float _gameSpeed {1.0f};
     CameraType _cameraType {CameraType::ThirdPerson};
     CameraType _savedCameraType {CameraType::ThirdPerson};

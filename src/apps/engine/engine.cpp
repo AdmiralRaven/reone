@@ -236,7 +236,7 @@ int Engine::run() {
         if (quit) {
             break;
         }
-        if (!_window->isInFocus() && !_options.graphics.headless) {
+        if (!_window->isInFocus() && !_options.graphics.headless && !_game->keepsRunningUnfocused()) {
             std::this_thread::sleep_for(std::chrono::milliseconds {100});
             continue;
         }

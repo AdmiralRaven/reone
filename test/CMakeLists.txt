@@ -83,6 +83,7 @@ set(TESTS_SOURCES
     ${TESTS_SOURCE_DIR}/game/jasaber.cpp
     ${TESTS_SOURCE_DIR}/game/jasabermoves.cpp
     ${TESTS_SOURCE_DIR}/game/messagebus.cpp
+    ${TESTS_SOURCE_DIR}/game/netsession.cpp
     ${TESTS_SOURCE_DIR}/game/minigame.cpp
     ${TESTS_SOURCE_DIR}/game/modulename.cpp
     ${TESTS_SOURCE_DIR}/game/modulesnapshot.cpp

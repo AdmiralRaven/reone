@@ -64,9 +64,14 @@ public:
         const Game &game,
         uint32_t callerId);
 
+    /** While suspended, as on a two-player session's guest, no script runs, and each run returns -1. */
+    bool suspended() const { return _suspended; }
+    void setSuspended(bool suspended) { _suspended = suspended; }
+
 private:
     script::IRoutines &_routines;
     resource::IScripts &_scripts;
+    bool _suspended {false};
 };
 
 } // namespace game

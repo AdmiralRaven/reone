@@ -21,6 +21,7 @@
 #include "reone/game/attack.h"
 #include "reone/game/console.h"
 #include "reone/game/jafoes.h"
+#include "reone/game/netsession.h"
 #include "reone/game/game.h"
 #include "reone/game/object/area.h"
 #include "reone/game/object/camera/thirdperson.h"
@@ -641,12 +642,19 @@ void JaSaber::strike(Creature &attacker, Creature &target, const JaSaberHit &hit
     } else if (jaTooBigToCut(target)) {
         standing = "too big to cut";
     }
+    ++_hitCount;
+    // A session's guest asks the host, which decides the damage.
+    if (_game.netSession().forwardSaberHit(target, hit.region)) {
+        saberSound({"cb_ls_hitsoft1", "cb_ls_hitsoft2"}, hit.point);
+        info(str(boost::format("jasaber: hit %s (%s) in %s at %.3f s, sent to the host") %
+                 target.tag() % jaBodyRegionName(hit.region) % moveName() % _modeTime));
+        return;
+    }
     auto weapon = attacker.getEquippedItem(InventorySlots::rightWeapon);
     AttackBuffer attack;
     attack.addContactHit(attacker, target, weapon.get(), jaSaberHitExtraDamage(target));
     attack.resolve(attacker, target);
     attack.signal(_game, _services, attacker, target);
-    ++_hitCount;
     // KOTOR's lightsaber hit, or its clash, with sparks, on a weapon that
     // stands up to it; and one that lives through the hit flinches.
     if (jaCanBlockSaber(target)) {

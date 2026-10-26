@@ -202,6 +202,7 @@ set(GAME_HEADERS
     ${GAME_INCLUDE_DIR}/jaretarget.h
     ${GAME_INCLUDE_DIR}/jasaber.h
     ${GAME_INCLUDE_DIR}/jasabermoves.h
+    ${GAME_INCLUDE_DIR}/netsession.h
     ${GAME_INCLUDE_DIR}/presentationgui.h
     ${GAME_INCLUDE_DIR}/gui.h
     ${GAME_INCLUDE_DIR}/gui/actionbar.h
@@ -447,6 +448,7 @@ set(GAME_SOURCES
     ${GAME_SOURCE_DIR}/jaretarget.cpp
     ${GAME_SOURCE_DIR}/jasaber.cpp
     ${GAME_SOURCE_DIR}/jasabermoves.cpp
+    ${GAME_SOURCE_DIR}/netsession.cpp
     ${GAME_SOURCE_DIR}/gui/actionbar.cpp
     ${GAME_SOURCE_DIR}/gui/actionslot.cpp
     ${GAME_SOURCE_DIR}/gui/areatransition.cpp
@@ -555,3 +557,7 @@ set_target_properties(game PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DI
 set_target_properties(game PROPERTIES DEBUG_POSTFIX "d")
 target_precompile_headers(game PRIVATE ${CMAKE_SOURCE_DIR}/src/pch.h)
 target_link_libraries(game PRIVATE gui scene resource movie graphics audio script system imgui)
+if(WIN32)
+    # The two-player session's sockets (netsession.cpp).
+    target_link_libraries(game PUBLIC ws2_32)
+endif()

@@ -20,6 +20,7 @@
 #include "reone/game/action/surrendertoenemies.h"
 #include "reone/game/action/wait.h"
 #include "reone/game/animationutil.h"
+#include "reone/game/game.h"
 #include "reone/game/modulesnapshot.h"
 #include "reone/game/object.h"
 #include "reone/game/savedruntime.h"
@@ -72,7 +73,10 @@ void runCommandAsActor(const ExecutionContext &command, Object &actor) {
 }
 
 void DoCommandAction::execute(std::shared_ptr<Action> self, Object &actor, float dt) {
-    runCommandAsActor(*_actionToDo, actor);
+    // A session's guest leaves scripts to the host.
+    if (!_game.followingHost()) {
+        runCommandAsActor(*_actionToDo, actor);
+    }
     complete();
 }
 

@@ -178,6 +178,7 @@ public:
     void setGender(Gender gender) { _gender = gender; }
     void setAppearance(int appearance) { _appearance = appearance; }
     void setMovementType(MovementType type);
+    MovementType movementType() const { return _movementType; }
     void setFaction(Faction faction) { _faction = faction; }
     /** Set the serialized base maximum and preserve the existing damage. */
     void setMaxHitPoints(int baseHitPoints) override;

@@ -42,6 +42,7 @@
 #include "reone/game/gui/sounds.h"
 #include "reone/game/jaconsole.h"
 #include "reone/game/jasaber.h"
+#include "reone/game/netsession.h"
 #include "reone/game/location.h"
 #include "reone/game/party.h"
 #include "reone/game/reputes.h"
@@ -675,6 +676,7 @@ void Game::initConsole() {
     registerConsoleCommand("startpazaak", "start a development Pazaak match", &Game::consoleStartPazaak);
     registerConsoleCommand("showpath", "show debug overlay for pathfinding", &Game::consoleShowPath);
     registerJaConsoleCommands(*this, _console);
+    registerNetConsoleCommands(*this, _console);
 
     if (_options.game.developer) {
         registerConsoleCommand("minigameinfo", "print minigame metadata for current area", &Game::consoleMiniGameInfo);
@@ -761,7 +763,10 @@ bool Game::handle(const input::Event &event) {
         }
         switch (_screen) {
         case Screen::InGame: {
-            if (_party.handle(event)) {
+            // In a two-player session each side keeps its own hero.
+            bool sessionKeepsLeader = keepsRunningUnfocused() && event.type == input::EventType::KeyDown &&
+                                      event.key.code == input::KeyCode::Tab;
+            if (!sessionKeepsLeader && _party.handle(event)) {
                 return true;
             }
             auto camera = getActiveCamera();
@@ -882,7 +887,10 @@ void Game::update(float frameTime) {
         auto updatedModule = _module;
         auto generation = _runtimeSessionGeneration;
         updatedModule->update(dt);
-        _combat.update(dt);
+        // A session's guest leaves combat to the host.
+        if (!_followingHost) {
+            _combat.update(dt);
+        }
         if (_module == updatedModule && _runtimeSessionGeneration == generation) {
             settleFadeArrival();
         }
@@ -890,6 +898,11 @@ void Game::update(float frameTime) {
 
     if (_screen == Screen::SwoopRace || _screen == Screen::Turret) {
         settleFadeArrival();
+    }
+
+    // A two-player session sends and takes in every frame, paused or not.
+    if (_netSession) {
+        _netSession->update();
     }
 
     auto gui = getScreenGUI();
@@ -3759,12 +3772,20 @@ void Game::stopMovement() {
 }
 
 void Game::scheduleModuleTransition(const std::string &moduleName, const std::string &entry) {
+    if (_followingHost) {
+        warn("net: the guest changes area only with the host, not to " + moduleName);
+        return;
+    }
     _nextModule = moduleName;
     _nextEntry = entry;
     _moduleTransitionMovies = std::queue<std::string>();
 }
 
 void Game::scheduleModuleTransitionWithMovies(const std::string &moduleName, const std::string &entry, std::vector<std::string> movies) {
+    if (_followingHost) {
+        warn("net: the guest changes area only with the host, not to " + moduleName);
+        return;
+    }
     _nextModule = moduleName;
     _nextEntry = entry;
     _moduleTransitionMovies = std::queue<std::string>();
@@ -4003,6 +4024,24 @@ JaSaber &Game::jaSaber() {
         _jaSaber = std::make_shared<JaSaber>(*this, _services, _console);
     }
     return *_jaSaber;
+}
+
+NetSession &Game::netSession() {
+    if (!_netSession) {
+        _netSession = std::make_shared<NetSession>(*this, _services);
+    }
+    return *_netSession;
+}
+
+void Game::setFollowingHost(bool following) {
+    _followingHost = following;
+    if (_scriptRunner) {
+        _scriptRunner->setSuspended(following);
+    }
+}
+
+bool Game::keepsRunningUnfocused() const {
+    return _netSession && _netSession->role() != NetRole::None;
 }
 
 void Game::withLoadingScreen(const std::string &imageResRef, const std::function<void()> &block) {

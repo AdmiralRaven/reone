@@ -32,6 +32,9 @@ namespace reone {
 namespace game {
 
 int ScriptRunner::run(const std::string &resRef, const std::vector<Argument> &args) {
+    if (_suspended) {
+        return -1;
+    }
     auto program = _scripts.get(resRef);
     if (!program)
         return -1;
@@ -55,7 +58,7 @@ int ScriptRunner::run(
     const SavedScriptContinuation &continuation,
     const Game &game,
     const std::vector<Argument> &args) {
-    if (!game.hasPlayableRuntimeSession() || !continuation.isCurrent(game)) {
+    if (_suspended || !game.hasPlayableRuntimeSession() || !continuation.isCurrent(game)) {
         return -1;
     }
 
