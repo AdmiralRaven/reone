@@ -333,6 +333,28 @@ TEST(JaReflect, should_jitter_more_at_low_ranks_and_while_swinging) {
     EXPECT_EQ(std::vector<float>({0.2f, 0.2f, 0.2f}), amounts);
 }
 
+TEST(JaReflect, should_count_starts_and_returns_as_swinging) {
+    // JA's larger jitter goes with PM_SaberInAttack or PM_SaberInTransitionAny,
+    // and the latter counts starts and returns
+    int starts = 0;
+    int returns = 0;
+    for (auto &move : JaSaberMoves::fast().moves()) {
+        switch (move.kind) {
+        case JaMoveKind::Ready:
+        case JaMoveKind::Parry:
+            EXPECT_EQ(JaReflectSteadiness::Steady, jaReflectSteadiness(move)) << move.name;
+            break;
+        default:
+            EXPECT_EQ(JaReflectSteadiness::Swinging, jaReflectSteadiness(move)) << move.name;
+            break;
+        }
+        starts += move.kind == JaMoveKind::Start ? 1 : 0;
+        returns += move.kind == JaMoveKind::Return ? 1 : 0;
+    }
+    EXPECT_GT(starts, 0);
+    EXPECT_GT(returns, 0);
+}
+
 // Parries in the state machine
 
 namespace {

@@ -38,9 +38,24 @@ runs:
     - name: Build solution
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: cmake --build . --config Release
+      run: cmake --build . --config Release 2>&1 | tee build.log
 
     - name: Run tests
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: ctest -VV -C Release
+      run: ctest -VV -C Release 2>&1 | tee ctest.txt
+
+    # The run's logs aren't always at hand where it is read: its summary, and
+    # on failure the first errors, go into annotations too.
+    - name: Annotate the test summary
+      shell: bash
+      if: always()
+      working-directory: ${{github.workspace}}/build
+      run: |-
+        if [ -f ctest.txt ]; then
+          grep -E '^\[==========\]|^\[  PASSED  \]|^\[  SKIPPED \] [0-9]|tests passed|tests failed' ctest.txt | head -n 8 | sed 's/%/%25/g; s/^/::notice title=tests::/' || true
+          grep -E '^\[  FAILED  \] [A-Za-z]' ctest.txt | head -n 9 | sed 's/%/%25/g; s/^/::error title=failed test::/' || true
+        fi
+        if [ -f build.log ]; then
+          grep -E ': (fatal )?error ' build.log | head -n 9 | sed 's/%/%25/g; s/^/::error title=build::/' || true
+        fi

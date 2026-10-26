@@ -253,6 +253,7 @@ void JaSaber::enter() {
     _boltParryReady = 0.0f;
     _parryCount = 0;
     _foes.reset();
+    _foes.resetCounts();
     _active = true;
     showPose();
     _game.setRelativeMouseMode(true);

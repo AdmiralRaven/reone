@@ -24,9 +24,23 @@ runs:
       - name: Build
         shell: bash
         working-directory: ${{github.workspace}}/build
-        run: cmake --build .
+        run: cmake --build . 2>&1 | tee build.log
 
       - name: Run Unit Tests
         shell: bash
         working-directory: ${{github.workspace}}/build
-        run: ctest -VV
+        run: ctest -VV 2>&1 | tee ctest.txt
+
+      # As on Windows: the summary, and on failure the first errors, as annotations.
+      - name: Annotate the test summary
+        shell: bash
+        if: always()
+        working-directory: ${{github.workspace}}/build
+        run: |-
+          if [ -f ctest.txt ]; then
+            grep -E '^\[==========\]|^\[  PASSED  \]|^\[  SKIPPED \] [0-9]|tests passed|tests failed' ctest.txt | head -n 8 | sed 's/%/%25/g; s/^/::notice title=tests::/' || true
+            grep -E '^\[  FAILED  \] [A-Za-z]' ctest.txt | head -n 9 | sed 's/%/%25/g; s/^/::error title=failed test::/' || true
+          fi
+          if [ -f build.log ]; then
+            grep -E ': (fatal )?error' build.log | head -n 9 | sed 's/%/%25/g; s/^/::error title=build::/' || true
+          fi

@@ -244,7 +244,6 @@ void JaFoes::reset() {
         }
     }
     _foes.clear();
-    _counts = Counts();
 }
 
 void JaFoes::rest(Foe &foe, Creature &attacker, float low, float high) {
@@ -564,7 +563,7 @@ bool JaFoes::moveBolt(Bolt &bolt, float dt) {
         }
         auto body = _saber.bodyParts();
         std::vector<JaBodyPart> guardParts;
-        switch (_saber.guard()) {
+        switch (bolt.passedGuard ? JaGuard::None : _saber.guard()) {
         case JaGuard::Wide:
             guardParts = jaWideGuard(body, facing, scale);
             break;
@@ -579,7 +578,9 @@ bool JaFoes::moveBolt(Bolt &bolt, float dt) {
         if (guardHit && guardHit->time <= wallTime && (!bodyHit || guardHit->time <= bodyHit->time)) {
             bool inFront = jaInFrontLevel(from, character->position(), facing, kJaReflectCone);
             if (jaBoltPassesGuard(_saber.defense(), inFront, _random)) {
-                // Through the saber's box, to the body behind if it meets it.
+                // Through the saber's box, to the body behind if it meets it,
+                // with no second draw on a later tick.
+                bolt.passedGuard = true;
                 ++_counts.passedGuard;
                 if (bodyHit && bodyHit->time <= wallTime) {
                     hitCharacter(bolt, bodyHit->point);
@@ -656,6 +657,8 @@ void JaFoes::hitCharacter(Bolt &bolt, const glm::vec3 &point) {
     auto character = _saber.character();
     auto shooter = _game.getObjectById<Creature>(bolt.shooter);
     if (!character || !shooter) {
+        // KOTOR's damage needs its attacker: a bolt whose shooter has left
+        // the game, not just died, does no harm.
         return;
     }
     ++_counts.hitCharacter;
@@ -740,12 +743,22 @@ void JaFoes::removeBolt(Bolt &bolt) {
 void JaFoes::playSound(const std::string &name, const glm::vec3 &point) {
     if (auto clip = _services.resource.audioClips.get(name)) {
         _services.audio.mixer.play(clip, audio::AudioType::Sound, 1.0f, false, point);
+    } else {
+        logMissing("sound", name);
+    }
+}
+
+void JaFoes::logMissing(const std::string &kind, const std::string &name) {
+    // Once a name: a misspelt one, or a game without it, shows in the log.
+    if (_missing.insert(name).second) {
+        warn(str(boost::format("jasaber: no %s named %s in the game's files") % kind % name));
     }
 }
 
 void JaFoes::playFlash(const std::string &name, const glm::vec3 &point) {
     auto model = _services.resource.models.get(name);
     if (!model) {
+        logMissing("effect model", name);
         return;
     }
     auto &graph = _services.scene.graphs.get(kSceneMain);

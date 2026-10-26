@@ -39,7 +39,8 @@ jobs:
         shell: bash
         working-directory: ${{github.workspace}}/build
         run: |-
-          gh release create $TAG $RELEASE.zip \
+          cp ctest.txt $RELEASE-tests.txt
+          gh release create $TAG $RELEASE.zip $RELEASE-tests.txt \
             --target "${{ github.sha }}" \
             --title "Reone $TAG" \
             --notes "Commit: ${{github.sha}}" \

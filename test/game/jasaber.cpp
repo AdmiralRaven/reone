@@ -24,6 +24,8 @@
 #include "reone/game/action.h"
 #include "reone/game/action/attackobject.h"
 #include "reone/game/camerastyle.h"
+#include "reone/game/effect/acincrease.h"
+#include "reone/game/effect/damage.h"
 #include "reone/game/game.h"
 #include "reone/game/gui/dialog.h"
 #include "reone/game/jaconsole.h"
@@ -42,6 +44,7 @@
 #include "reone/resource/gff.h"
 #include "reone/scene/graph.h"
 #include "reone/scene/node/model.h"
+#include "reone/system/randomutil.h"
 
 using namespace reone;
 using namespace reone::game;
@@ -1018,10 +1021,12 @@ protected:
     }
 
     // A hostile creature with \p baseItem in hand at \p at, or none, whose
-    // attacks always hit, attacking the leader.
-    std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, std::optional<int> baseItem) {
+    // attacks always hit, unless \p assuredHit is false, attacking the leader.
+    std::shared_ptr<Creature> addFoe(const std::string &tag, const glm::vec2 &at, std::optional<int> baseItem, bool assuredHit = true) {
         auto foe = addCreature(tag, at, 1.0f, true, std::nullopt, baseItem ? weapon(*baseItem) : nullptr);
-        foe->applyAssuredHit();
+        if (assuredHit) {
+            foe->applyAssuredHit();
+        }
         foe->addAction(game.newAction<AttackObjectAction>(leader));
         return foe;
     }
@@ -1078,7 +1083,7 @@ TEST_F(JaSaberFoes, should_parry_bolts_from_the_front_and_send_them_back_at_the_
     EXPECT_LT(trooper->currentHitPoints(), 20);
 }
 
-TEST_F(JaSaberFoes, should_let_a_bolt_through_the_guard_or_absorb_it_by_the_draws) {
+TEST_F(JaSaberFoes, should_let_a_bolt_through_the_guard_when_its_draw_comes_up_0) {
     // given: draws from 0 to d² that come up 0, letting bolts through the guard
     game.jaSaber().setDefense(3);
     foes().setRandom(drawing([](int low, int) { return low; }), lowest());
@@ -1091,6 +1096,29 @@ TEST_F(JaSaberFoes, should_let_a_bolt_through_the_guard_or_absorb_it_by_the_draw
     EXPECT_GE(foes().counts().passedGuard, 1);
     EXPECT_GE(foes().counts().hitCharacter, 1);
     EXPECT_EQ(0, foes().counts().sentBack);
+    EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_draw_once_for_a_bolt_that_meets_the_guard) {
+    // given: at rank 3, the guard's first draw, from 0 to 9, comes up 0 and
+    // lets a bolt through; every later one comes up 5 and would stop it
+    game.jaSaber().setDefense(3);
+    int guardDraws = 0;
+    foes().setRandom(drawing([&guardDraws](int low, int high) {
+        if (high != 9) {
+            return low;
+        }
+        return guardDraws++ == 0 ? 0 : 5;
+    }),
+                     lowest());
+    addFoe("trooper", glm::vec2(0.0f, 6.0f), kBlasterPistol);
+
+    // when
+    play(1.5f);
+
+    // then: the first bolt reached the body, through the guard once
+    EXPECT_EQ(1, foes().counts().passedGuard);
+    EXPECT_EQ(1, foes().counts().hitCharacter);
     EXPECT_LT(leader->currentHitPoints(), 100);
 }
 
@@ -1109,6 +1137,29 @@ TEST_F(JaSaberFoes, should_absorb_a_stopped_bolt_when_the_draw_to_send_it_back_c
     EXPECT_EQ(0, foes().counts().sentBack);
     EXPECT_EQ(0, foes().counts().hitCharacter);
     EXPECT_EQ(100, leader->currentHitPoints());
+}
+
+TEST_F(JaSaberFoes, should_aim_bolts_and_land_blows_only_as_kotors_roll_hits) {
+    // given: a leader no roll but a natural 20 hits, with no defense; a
+    // blaster and a vibroblade behind it whose attacks aren't assured
+    setRandomSeed(36);
+    game.jaSaber().setDefense(0);
+    leader->applyEffect(std::make_shared<ACIncreaseEffect>(100, ACBonus::Deflection, kAllDamageTypeFlags), DurationType::Permanent);
+    addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol, /*assuredHit=*/false);
+    addFoe("blade", glm::vec2(0.0f, -1.2f), kVibroblade, /*assuredHit=*/false);
+
+    // when
+    play(6.0f);
+
+    // then: bolts fired that weren't aimed, and only aimed ones hit; blows
+    // came that missed by the roll
+    const auto &counts = foes().counts();
+    EXPECT_GE(counts.bolts, 2);
+    EXPECT_LT(counts.aimed, counts.bolts);
+    EXPECT_LE(counts.hitCharacter, counts.aimed);
+    EXPECT_GE(counts.swings, 2);
+    EXPECT_GE(counts.blowsMissed, 1);
+    EXPECT_EQ(counts.swings, counts.blowsMissed + counts.blowsLanded);
 }
 
 TEST_F(JaSaberFoes, should_not_defend_at_rank_0) {
@@ -1145,6 +1196,28 @@ TEST_F(JaSaberFoes, should_parry_an_armed_blow_from_the_front_and_take_one_from_
     // then: that blow lands
     EXPECT_GE(foes().counts().blowsLanded, 1);
     EXPECT_LT(leader->currentHitPoints(), 100);
+}
+
+TEST_F(JaSaberFoes, should_let_a_swing_miss_a_character_that_gets_behind_it) {
+    // given: a vibroblade in front of the leader starts a swing
+    addFoe("blade", glm::vec2(0.0f, 1.2f), kVibroblade);
+    for (int frame = 0; frame < 120 && foes().counts().swings == 0; ++frame) {
+        play(1.0f / 60.0f);
+    }
+    ASSERT_EQ(1, foes().counts().swings);
+
+    // when: the leader steps behind it, still in its reach
+    leader->setPosition(glm::vec3(0.0f, 2.0f, 0.0f));
+    const auto &counts = foes().counts();
+    for (int frame = 0; frame < 120 && counts.blowsMissed + counts.blowsLanded + counts.blowsParried == 0; ++frame) {
+        play(1.0f / 60.0f);
+    }
+
+    // then: the swing went where it began, and missed
+    EXPECT_EQ(1, counts.blowsMissed);
+    EXPECT_EQ(0, counts.blowsLanded);
+    EXPECT_EQ(0, counts.blowsParried);
+    EXPECT_EQ(100, leader->currentHitPoints());
 }
 
 TEST_F(JaSaberFoes, should_take_a_blow_from_fists_or_claws_even_in_front) {
@@ -1186,13 +1259,49 @@ TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_rounds_when_saber_mode
     play(0.6f);
     ASSERT_GE(foes().counts().bolts, 1);
 
-    // when
+    // when: saber mode ends in the round's first half
     game.jaSaber().leave();
 
-    // then: the bolts are gone, and the real-time attack ends on its next tick
+    // then: the bolts are gone, and the counts stay for jaenemies
     EXPECT_EQ(0u, foes().boltsInFlight());
     EXPECT_FALSE(foes().fightsInRealTime(*leader));
-    play(1.0f / 60.0f);
+    EXPECT_GE(foes().counts().bolts, 1);
+    int volleys = foes().counts().volleys;
+    int hitPoints = leader->currentHitPoints();
+
+    // when: the round goes on
+    play(1.5f);
+
+    // then: the attack went on by KOTOR's round, its blow landing 1 s in,
+    // with no more volleys of the real-time kind
+    EXPECT_FALSE(attack->isCompleted());
+    EXPECT_LT(leader->currentHitPoints(), hitPoints);
+    EXPECT_EQ(volleys, foes().counts().volleys);
+
+    // when: the round ends
+    play(1.0f);
+
+    // then: the attack ends with it, for the end-of-round script to choose the next
+    EXPECT_TRUE(attack->isCompleted());
+}
+
+TEST_F(JaSaberFoes, should_end_an_attack_handed_back_past_its_turn_with_the_round) {
+    // given: a blaster in the round's second half, past its turn to attack
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
+    auto attack = trooper->getCurrentAction();
+    play(1.8f);
+
+    // when
+    game.jaSaber().leave();
+    play(0.5f);
+
+    // then: it waits for the round's end
+    EXPECT_FALSE(attack->isCompleted());
+
+    // when
+    play(1.0f);
+
+    // then: it ended with the round, rather than wait on a turn that's gone
     EXPECT_TRUE(attack->isCompleted());
 }
 

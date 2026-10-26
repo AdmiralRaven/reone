@@ -161,8 +161,8 @@ int jaParryWeaponTimeMs(int defense);
 /** Which way a parry or a move the defender is in sends a bolt off its line (G_ReflectMissile, g_missile.cpp:147-292). */
 enum class JaReflectSteadiness {
     Steady,   /**< a parry, or the ready stance */
-    Swinging, /**< an attack or a transition */
-    Other     /**< a start or a return */
+    Swinging, /**< a start, an attack, a transition or a return */
+    Other     /**< any other move, as a bounce or a knockaway, none of which saber mode has yet */
 };
 
 JaReflectSteadiness jaReflectSteadiness(const JaSaberMove &move);

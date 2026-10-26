@@ -244,8 +244,12 @@ JaReflectSteadiness jaReflectSteadiness(const JaSaberMove &move) {
     case JaMoveKind::Ready:
     case JaMoveKind::Parry:
         return JaReflectSteadiness::Steady;
+    case JaMoveKind::Start:
     case JaMoveKind::Attack:
+    case JaMoveKind::Return:
     case JaMoveKind::Transition:
+        // PM_SaberInAttack or PM_SaberInTransitionAny, which counts starts
+        // and returns with transitions (bg_panimate.cpp:1386-1401).
         return JaReflectSteadiness::Swinging;
     default:
         return JaReflectSteadiness::Other;

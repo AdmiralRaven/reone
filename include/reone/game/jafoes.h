@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <set>
+
 #include "reone/game/attack.h"
 #include "reone/game/jadefense.h"
 #include "reone/game/projectiles.h"
@@ -105,10 +107,12 @@ public:
 
     /**
      * How far ahead the saber sees a bolt coming, in seconds: JA's scanner
-     * looks 256 units out (wp_saber.cpp:7551-7779), which its blaster bolts,
-     * at 2300 units a second, cross in about 0.11 s.
+     * looks 256 units out (wp_saber.cpp:7551-7779), which an enemy's E-11
+     * bolt crosses in about 0.22 s. That bolt flies at 1150 units a second,
+     * the player's 2300 cut by half below hard difficulty
+     * (BLASTER_NPC_VEL_CUT, wp_blaster_rifle.cpp:48-59; weapons.h:181-182).
      */
-    static constexpr float kBoltWarning = 256.0f / 2300.0f;
+    static constexpr float kBoltWarning = 256.0f / 1150.0f;
 
     /**
      * How far round a guard reaches for a blow, as the direction to the
@@ -164,8 +168,11 @@ public:
     /** Moves the bolts in flight, and resolves what they meet; saber mode calls it each tick. */
     void update(float dt);
 
-    /** Forgets every enemy's clock and every bolt, and removes their models. */
+    /** Forgets every enemy's clock and every bolt, and removes their models. The counts stay. */
     void reset();
+
+    /** Starts the counts over, as saber mode starts. */
+    void resetCounts() { _counts = Counts(); }
 
     size_t boltsInFlight() const { return _bolts.size(); }
     const Counts &counts() const { return _counts; }
@@ -212,6 +219,9 @@ private:
         float age {0.0f};
         bool sentBack {false};
         bool parryPrepared {false};
+        // Through the saber's guard by its draw: it meets the body, not the
+        // guard again, as JA's retrace leaves the saber out.
+        bool passedGuard {false};
         std::shared_ptr<scene::ModelSceneNode> model;
     };
 
@@ -231,11 +241,13 @@ private:
     std::vector<Bolt> _bolts;
     std::vector<Flash> _flashes;
     Counts _counts;
+    std::set<std::string> _missing; /**< sounds and effects asked for that the game didn't have */
 
     void startVolley(Foe &foe, Creature &attacker, Creature &target, const JaFoeAttack &kind);
     void fire(Foe &foe, const Foe::Shot &shot, Creature &attacker, Creature &target);
     void startSwing(Foe &foe, Creature &attacker, Creature &target, const JaFoeAttack &kind);
     void strike(Foe &foe, Creature &attacker, Creature &target);
+    void logMissing(const std::string &kind, const std::string &name);
     void rest(Foe &foe, Creature &attacker, float low, float high);
 
     /** Moves one bolt on; false when it is gone. */

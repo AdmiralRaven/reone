@@ -190,7 +190,10 @@ void UseFeatAction::execute(std::shared_ptr<Action> self, Object &actor, float d
         if (!busy && !navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
             return;
         }
-        attacker.face(*target);
+        if (!busy || isRangedWieldType(attacker.getWieldType())) {
+            // A volley tracks the character; a swing goes where it began.
+            attacker.face(*target);
+        }
         JaFoeAttack kind;
         kind.feat = _feat;
         kind.projectiles = getProjectileType(_feat).value_or(ProjectileAttackType::Basic);
@@ -202,8 +205,9 @@ void UseFeatAction::execute(std::shared_ptr<Action> self, Object &actor, float d
         return;
     }
     if (_realTime) {
-        finish(attacker);
-        return;
+        // Saber mode ended mid-attack: on by KOTOR's schedule, as AttackObjectAction.
+        _realTime = false;
+        _handedBack = true;
     }
 
     if (!navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
@@ -214,6 +218,10 @@ void UseFeatAction::execute(std::shared_ptr<Action> self, Object &actor, float d
 
     const CombatRound &round = _game.combat().addAction(self, actor);
     AttackSchedule::State state = _schedule.update(round, *self, dt);
+    if (_handedBack && state == AttackSchedule::WaitAttack && round.state == CombatRound::Finished) {
+        finish(attacker);
+        return;
+    }
 
     // Gameplay updates
     switch (state) {

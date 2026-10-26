@@ -62,6 +62,7 @@ private:
     AttackBuffer _attacks;
     bool _reachedTarget {false};
     bool _realTime {false}; /**< whether saber mode's real-time foes took the attack over (JaFoes) */
+    bool _handedBack {false}; /**< whether saber mode ended mid-attack, handing it back to KOTOR's round */
 
     ProjectileSequence _projectiles;
 };
