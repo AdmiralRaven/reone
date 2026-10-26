@@ -793,10 +793,18 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
 
 std::string NetSession::status() const {
     std::string match = _manifestsMatch ? (*_manifestsMatch ? "match" : "DIFFER") : "unknown";
-    return str(boost::format("net: %s, %s%s, playing party member %d; objects %s; %d sent, %d received, %d applied, "
-                             "%d actions cleared, %d hits sent, %d hits applied, %d rejected") %
+    // Where the two heroes stand here, for comparing the two sides' logs.
+    auto where = [](const std::shared_ptr<Creature> &creature) {
+        if (!creature) {
+            return std::string("none");
+        }
+        return str(boost::format("%s at %.2f %.2f") % creature->tag() % creature->position().x % creature->position().y);
+    };
+    return str(boost::format("net: %s, %s%s, guest playing party member %d; objects %s; PC %s, guest's hero %s; "
+                             "%d sent, %d received, %d applied, %d actions cleared, %d hits sent, %d hits applied, %d rejected") %
                roleName(_role) % (_connected ? "connected to " : "waiting for ") %
                (_peer.port ? _peer.str() : std::string("a guest")) % _guestNpc % match %
+               where(_game.party().player()) % where(guestHero()) %
                _counts.sent % _counts.received % _counts.applied % _counts.clearedActions % _counts.hitsForwarded %
                _counts.hitsApplied % _counts.rejected);
 }
