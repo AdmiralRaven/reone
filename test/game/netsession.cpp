@@ -423,7 +423,7 @@ TEST_F(NetSessionTest, should_keep_its_guest_when_a_stray_hello_comes_from_elsew
     stray.open(0);
     auto to = NetSocket::resolve("127.0.0.1", hostPort);
     ASSERT_TRUE(to);
-    std::vector<uint8_t> shortHello {'R', 'N', 'E', 'T', 1, 0, 1, 1, 0, 0, 0};
+    std::vector<uint8_t> shortHello {'R', 'N', 'E', 'T', static_cast<uint8_t>(NetSession::kProtocol), 0, 1, 1, 0, 0, 0};
     stray.send(*to, shortHello);
     std::vector<uint8_t> otherMember(shortHello);
     otherMember.push_back(static_cast<uint8_t>(NetRole::Guest));
@@ -453,4 +453,64 @@ TEST_F(NetSessionTest, should_end_the_session_when_a_save_loads_or_the_main_menu
     EXPECT_EQ(NetRole::None, guest.net().role());
     EXPECT_FALSE(guest.game.followingHost());
     EXPECT_FALSE(guest.game.party().leaderLocked());
+}
+
+TEST_F(NetSessionTest, should_pause_the_guest_while_the_host_pauses_in_a_fight) {
+    // given: joined, the host's party in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+
+    // when: the host pauses
+    host.game.setPaused(true);
+    exchange(12);
+
+    // then: so does the guest, and its own pause key doesn't let it go
+    EXPECT_TRUE(guest.net().hostPausedInFight());
+    EXPECT_TRUE(guest.game.isPaused());
+    guest.game.setPaused(false);
+    exchange(12);
+    EXPECT_TRUE(guest.game.isPaused());
+
+    // when: the host plays on
+    host.game.setPaused(false);
+    exchange(12);
+
+    // then: so does the guest
+    EXPECT_FALSE(guest.net().hostPausedInFight());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_leave_the_guest_playing_when_the_host_pauses_out_of_combat) {
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    host.game.setPaused(true);
+    exchange(12);
+
+    EXPECT_FALSE(guest.net().hostPausedInFight());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_keep_the_guests_own_pause_when_the_host_plays_on) {
+    // given: the guest paused on its own, then the host in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    guest.game.setPaused(true);
+    host.pc->activateCombat();
+    host.game.setPaused(true);
+    exchange(12);
+
+    // when
+    host.game.setPaused(false);
+    exchange(12);
+
+    // then: the guest's own pause stays
+    EXPECT_TRUE(guest.game.isPaused());
 }

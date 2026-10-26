@@ -99,6 +99,7 @@ constexpr size_t kHeaderSize = 4 + 2 + 1 + 4;
 constexpr float kHelloInterval = 0.5f;
 constexpr float kManifestInterval = 2.0f;
 constexpr double kHoldAfterConversation = 1.0;
+constexpr uint8_t kFlagPausedInFight = 1;
 constexpr size_t kMaxDatagram = 1400;
 
 // Little-endian writing and reading.
@@ -422,6 +423,34 @@ std::shared_ptr<Creature> NetSession::guestHero() const {
     return nullptr;
 }
 
+bool NetSession::partyInCombat() const {
+    for (auto &member : _game.party().members()) {
+        if (member.creature && member.creature->isInCombat()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void NetSession::followHostPause(bool pausedInFight) {
+    if (pausedInFight) {
+        if (!_hostPausedInFight) {
+            _hostPausedInFight = true;
+            _pausedByHost = !_game.isPaused();
+            info("net: the host paused in a fight; this side waits for it");
+        }
+        // Even if this side's own pause key let go meanwhile.
+        _game.setPaused(true);
+    } else if (_hostPausedInFight) {
+        _hostPausedInFight = false;
+        if (_pausedByHost) {
+            _game.setPaused(false);
+            _pausedByHost = false;
+        }
+        info("net: the host plays on");
+    }
+}
+
 void NetSession::host(uint16_t port, int guestNpc) {
     stop();
     if (!_game.module() || !_game.module()->area()) {
@@ -480,6 +509,11 @@ void NetSession::stop(const std::string &reason) {
     }
     _game.party().setLeaderLocked(false);
     if (_role == NetRole::Guest) {
+        if (_hostPausedInFight && _pausedByHost) {
+            _game.setPaused(false);
+        }
+        _hostPausedInFight = false;
+        _pausedByHost = false;
         _game.setFollowingHost(false);
         // The PC leads again.
         if (_game.module() && _game.module()->area()) {
@@ -554,10 +588,13 @@ void NetSession::sendSnapshot() {
         states.push_back(stateOf(*creature));
     }
     // As many datagrams as it takes, each under kMaxDatagram.
-    size_t perDatagram = (kMaxDatagram - kHeaderSize - 2) / 24;
+    // The host's pause in a fight, which the guest follows (kFlagPausedInFight).
+    uint8_t flags = _game.isPaused() && partyInCombat() ? kFlagPausedInFight : 0;
+    size_t perDatagram = (kMaxDatagram - kHeaderSize - 3) / 24;
     for (size_t first = 0; first < states.size() || first == 0; first += perDatagram) {
         auto out = header(MessageType::Snapshot);
         size_t count = std::min(perDatagram, states.size() - std::min(first, states.size()));
+        putU8(out, flags);
         putU16(out, static_cast<uint16_t>(count));
         for (size_t i = first; i < first + count; ++i) {
             putState(out, states[i]);
@@ -722,7 +759,13 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             ++_counts.stale;
             return;
         }
+        uint8_t flags = in.u8();
         uint16_t count = in.u16();
+        if (!in.ok()) {
+            ++_counts.rejected;
+            return;
+        }
+        followHostPause((flags & kFlagPausedInFight) != 0);
         auto hero = guestHero();
         for (uint16_t i = 0; i < count; ++i) {
             auto state = readState(in);

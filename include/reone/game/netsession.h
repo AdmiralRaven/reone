@@ -109,7 +109,9 @@ struct NetCreatureState {
  *   applies with its own rules (jaSaberHitExtraDamage), so that hit points
  *   and deaths come from the host alone;
  * - the guest runs no scripts, combat rounds, saves or area changes of its
- *   own, and its creatures do nothing but what the host sends.
+ *   own, and its creatures do nothing but what the host sends;
+ * - the host pausing while its party is in combat pauses the guest too, as
+ *   the user asked (2026-10-26); out of combat each side pauses alone.
  *
  * Messages are little-endian, each starting with "RNET", the protocol
  * version and a type. Nothing is retried: a newer snapshot replaces a lost
@@ -124,7 +126,7 @@ public:
     /** How long without a message before the other side counts as gone, in seconds of real time. */
     static constexpr float kTimeout = 5.0f;
 
-    static constexpr uint16_t kProtocol = 1;
+    static constexpr uint16_t kProtocol = 2; /**< 2: snapshots carry the host's pause in a fight */
 
     enum class MessageType : uint8_t {
         Hello = 1,
@@ -203,6 +205,9 @@ public:
     };
     const Counts &counts() const { return _counts; }
 
+    /** On the guest, whether the host has paused in a fight, which pauses this side too. */
+    bool hostPausedInFight() const { return _hostPausedInFight; }
+
     /** Whether the other side's objects matched this side's; none until its hello arrived. */
     std::optional<bool> manifestsMatch() const { return _manifestsMatch; }
 
@@ -223,6 +228,8 @@ private:
     bool _holding {false};
     double _holdUntil {0.0};
     bool _warnedNoHero {false};
+    bool _hostPausedInFight {false};
+    bool _pausedByHost {false}; /**< whether the guest was playing when the host's pause stopped it */
     std::set<uint32_t> _unknownIds;
     std::optional<bool> _manifestsMatch;
     NetSocket::Address _refused; /**< the last side refused for playing another member, warned of once */
@@ -231,6 +238,8 @@ private:
 
     double now() const;
     std::shared_ptr<Creature> guestHero() const;
+    bool partyInCombat() const;
+    void followHostPause(bool pausedInFight);
     std::vector<uint8_t> header(MessageType type);
     void sendHello();
     void sendSnapshot();
