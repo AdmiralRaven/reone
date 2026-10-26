@@ -318,13 +318,19 @@ TEST(JaConsole, should_show_and_set_the_defense_rank_and_the_real_time_enemies) 
     Game game(resource::GameID::KotOR, "", engine.options(), engine.services(), console);
     registerJaConsoleCommands(game, console);
 
+    // no game loaded, so no character and no feats: rank 0
     console.execute("jadefense", {});
-    EXPECT_EQ(std::string("jadefense: saber defense rank 2"), lastLine(console));
+    EXPECT_EQ(std::string("jadefense: saber defense rank 0, from the character's Jedi Defense feats"), lastLine(console));
     console.execute("jadefense", {"3"});
     EXPECT_EQ(std::string("jasaber: saber defense rank 3"), lastLine(console));
     EXPECT_EQ(3, game.jaSaber().defense());
+    console.execute("jadefense", {});
+    EXPECT_EQ(std::string("jadefense: saber defense rank 3, set by jadefense; jadefense auto goes back to the feats"), lastLine(console));
     console.execute("jadefense", {"0"});
     EXPECT_EQ(std::string("jasaber: saber defense rank 0, no defense"), lastLine(console));
+    console.execute("jadefense", {"auto"});
+    EXPECT_EQ(std::string("jasaber: saber defense rank 0, from the character's feats, no defense"), lastLine(console));
+    EXPECT_TRUE(game.jaSaber().defenseFromFeats());
 
     console.execute("jaenemies", {});
     EXPECT_EQ(std::string("jaenemies: enemies fight saber mode in real time; 0 volleys, 0 bolts (0 aimed): 0 sent back, "

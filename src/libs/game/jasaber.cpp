@@ -817,28 +817,57 @@ std::vector<JaBodyPart> JaSaber::bodyParts() const {
 
 JaGuard JaSaber::guard() const {
     const JaSaberMove *move = currentMove();
-    if (!move || _litBlades <= 0 || _defense < 1) {
+    if (!move || _litBlades <= 0 || defense() < 1) {
         return JaGuard::None;
     }
     return jaGuardOf(*move);
 }
 
+int jaDefenseFromFeats(const Creature &creature) {
+    const auto &attributes = creature.attributes();
+    if (attributes.hasFeat(FeatType::MasterJediDefense)) {
+        return 3;
+    }
+    if (attributes.hasFeat(FeatType::AdvancedJediDefense)) {
+        return 2;
+    }
+    return attributes.hasFeat(FeatType::JediDefense) ? 1 : 0;
+}
+
+int JaSaber::defense() const {
+    if (_defenseSet) {
+        return *_defenseSet;
+    }
+    auto creature = character();
+    if (!creature) {
+        creature = _game.party().getLeader();
+    }
+    return creature ? jaDefenseFromFeats(*creature) : 0;
+}
+
 void JaSaber::setDefense(int defense) {
-    _defense = glm::clamp(defense, 0, kJaMaxDefense);
-    print(str(boost::format("jasaber: saber defense rank %d%s") % _defense % (_defense == 0 ? ", no defense" : "")));
+    _defenseSet = glm::clamp(defense, 0, kJaMaxDefense);
+    print(str(boost::format("jasaber: saber defense rank %d%s") % *_defenseSet % (*_defenseSet == 0 ? ", no defense" : "")));
+}
+
+void JaSaber::setDefenseFromFeats() {
+    _defenseSet.reset();
+    int rank = defense();
+    print(str(boost::format("jasaber: saber defense rank %d, from the character's feats%s") % rank % (rank == 0 ? ", no defense" : "")));
 }
 
 bool JaSaber::parryBolt(const glm::vec3 &boltPosition) {
-    if (!_active || !_driver || _defense < 1 || _litBlades <= 0 || input().attack || _modeTime < _boltParryReady ||
+    int rank = defense();
+    if (!_active || !_driver || rank < 1 || _litBlades <= 0 || input().attack || _modeTime < _boltParryReady ||
         !_driver->machine().canBlock()) {
         return false;
     }
     JaBlock block = jaBlockAt(boltPosition, eye(), viewFacing(), metresPerUnit());
     int move = _driver->machine().moves().reflect(block);
-    if (!_driver->block(move, jaParryWeaponTimeMs(_defense))) {
+    if (!_driver->block(move, jaParryWeaponTimeMs(rank))) {
         return false;
     }
-    _boltParryReady = _modeTime + static_cast<float>(jaBoltParryDebounceMs(_defense)) / 1000.0f;
+    _boltParryReady = _modeTime + static_cast<float>(jaBoltParryDebounceMs(rank)) / 1000.0f;
     ++_parryCount;
     info(str(boost::format("jasaber: the saber sees a bolt coming, %s, at %.3f s") % jaBlockName(block) % _modeTime));
     return true;
@@ -851,7 +880,7 @@ bool JaSaber::parryBlow(const Creature &attacker, const glm::vec3 &point) {
         return false;
     }
     JaBlock block = jaBlockAt(point, eye(), viewFacing(), metresPerUnit());
-    if (_driver->block(_driver->machine().moves().parry(block), jaParryWeaponTimeMs(_defense))) {
+    if (_driver->block(_driver->machine().moves().parry(block), jaParryWeaponTimeMs(defense()))) {
         ++_parryCount;
     }
     return true;

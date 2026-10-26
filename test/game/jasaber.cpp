@@ -998,6 +998,10 @@ protected:
             .WillRepeatedly(Return(weapons));
         leader->setMaxHitPoints(100);
         leader->setCurrentHitPoints(100);
+        // A Jedi of level 4 or more: Jedi Defense and Advanced Jedi Defense,
+        // defense rank 2.
+        leader->attributes().addFeat(FeatType::JediDefense);
+        leader->attributes().addFeat(FeatType::AdvancedJediDefense);
         // The blade lit, and the guard with it.
         play(1.0f / 60.0f);
     }
@@ -1039,6 +1043,44 @@ protected:
 };
 
 } // namespace
+
+TEST_F(JaSaberFoes, should_take_the_defense_rank_from_kotors_jedi_defense_feats) {
+    // given: the fixture's leader, with Jedi Defense and Advanced Jedi Defense
+    EXPECT_TRUE(game.jaSaber().defenseFromFeats());
+    EXPECT_EQ(2, game.jaSaber().defense());
+
+    // when: Master Jedi Defense, at level 8
+    leader->attributes().addFeat(FeatType::MasterJediDefense);
+
+    // then
+    EXPECT_EQ(3, game.jaSaber().defense());
+
+    // when: set by hand, then left to the feats again
+    game.jaSaber().setDefense(1);
+    EXPECT_FALSE(game.jaSaber().defenseFromFeats());
+    EXPECT_EQ(1, game.jaSaber().defense());
+    game.jaSaber().setDefenseFromFeats();
+    EXPECT_EQ(3, game.jaSaber().defense());
+}
+
+TEST(JaSaberDefense, should_rank_the_highest_jedi_defense_feat_and_none_without_any) {
+    TestEngine &engine = testEngine();
+    StubConsole console;
+    Game game(GameID::KotOR, "", engine.options(), engine.services(), console);
+    auto creature = game.newCreature();
+    EXPECT_EQ(0, jaDefenseFromFeats(*creature));
+    creature->attributes().addFeat(FeatType::JediDefense);
+    EXPECT_EQ(1, jaDefenseFromFeats(*creature));
+    creature->attributes().addFeat(FeatType::AdvancedJediDefense);
+    EXPECT_EQ(2, jaDefenseFromFeats(*creature));
+    creature->attributes().addFeat(FeatType::MasterJediDefense);
+    EXPECT_EQ(3, jaDefenseFromFeats(*creature));
+
+    // one feat alone stands for its rank, as a save may hold only the last
+    auto master = game.newCreature();
+    master->attributes().addFeat(FeatType::MasterJediDefense);
+    EXPECT_EQ(3, jaDefenseFromFeats(*master));
+}
 
 TEST(JaFoesRules, should_see_a_bolt_coming_as_long_before_as_ja_does_its_enemies_bolts) {
     // JA's scanner looks 256 units out, and its enemies' E-11 bolts below

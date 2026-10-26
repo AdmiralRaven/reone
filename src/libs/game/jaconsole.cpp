@@ -447,15 +447,21 @@ void JaConsole::creature(const ConsoleArgs &args) {
 }
 
 void JaConsole::defense(const ConsoleArgs &args) {
+    auto &saber = saberControl();
     if (args.size() == 1) {
-        print(str(boost::format("jadefense: saber defense rank %d") % saberControl().defense()));
+        print(str(boost::format("jadefense: saber defense rank %d, %s") % saber.defense() %
+                  (saber.defenseFromFeats() ? "from the character's Jedi Defense feats" : "set by jadefense; jadefense auto goes back to the feats")));
+        return;
+    }
+    if (args.size() == 2 && boost::iequals(std::string(*args[1]), "auto")) {
+        saber.setDefenseFromFeats();
         return;
     }
     auto rank = args.get<int>(1);
     if (args.size() != 2 || !rank || *rank < 0 || *rank > kJaMaxDefense) {
-        throw std::runtime_error("Usage: jadefense [0-3]");
+        throw std::runtime_error("Usage: jadefense [0-3|auto]");
     }
-    saberControl().setDefense(*rank);
+    saber.setDefense(*rank);
 }
 
 void JaConsole::enemies(const ConsoleArgs &args) {
@@ -798,7 +804,7 @@ void registerJaConsoleCommands(Game &game, IConsole &console) {
                             logged("jafight", &JaConsole::fight));
     console.registerCommand("jause", "use a healing item on the party leader, as a click on the action bar's slot does: jause <item tag>",
                             logged("jause", &JaConsole::use));
-    console.registerCommand("jadefense", "show or set saber mode's defense rank, from 0, none, to 3: jadefense [0-3]",
+    console.registerCommand("jadefense", "show or set saber mode's defense rank, from 0, none, to 3, or leave it to the Jedi Defense feats: jadefense [0-3|auto]",
                             logged("jadefense", &JaConsole::defense));
     console.registerCommand("jaenemies", "show what real-time enemies did, or turn them on or off: jaenemies [on|off]",
                             logged("jaenemies", &JaConsole::enemies));

@@ -49,9 +49,10 @@ JaRandomFloat jaGameRandomFloat();
 constexpr int kJaMaxDefense = 3;
 
 /**
- * The defense rank saber mode starts with: Jedi Academy's middle one. In JA
- * it is the Force power Saber Defense, which its player raises from 1 to 3;
- * KOTOR's progression may set it later (#21).
+ * Jedi Academy's middle defense rank. In JA it is the Force power Saber
+ * Defense, which its player raises from 1 to 3; here the rank comes from
+ * KOTOR's Jedi Defense feats (jaDefenseFromFeats), and this is the one a
+ * scripted check sets with jadefense.
  */
 constexpr int kJaDefaultDefense = 2;
 

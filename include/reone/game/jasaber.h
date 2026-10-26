@@ -89,6 +89,15 @@ private:
 };
 
 /**
+ * The saber's defense rank from \p creature's feats: KOTOR's own chain for
+ * deflecting blaster bolts with a lightsaber, which Jedi classes are given
+ * as they rise. 1 with Jedi Defense (feat 55, a Jedi's from 1st level), 2
+ * with Advanced Jedi Defense (feat 1, level 4), 3 with Master Jedi Defense
+ * (feat 24, level 8): the highest it has. 0 without any.
+ */
+int jaDefenseFromFeats(const Creature &creature);
+
+/**
  * Saber mode: with the lightsaber drawn, the player's character fights the
  * way Jedi Academy's single-player player does, in the fast style.
  *
@@ -128,8 +137,9 @@ private:
  *
  * The character's enemies fight it in real time meanwhile (JaFoes), and its
  * saber defends it as Jedi Academy's player's does, at a defense rank from 0
- * to 3 (kJaDefaultDefense): it parries a bolt it sees coming and the blows
- * of armed enemies, and stops bolts that meet its guard, sending some back.
+ * to 3, from KOTOR's Jedi Defense feats (jaDefenseFromFeats): it parries a
+ * bolt it sees coming and the blows of armed enemies, and stops bolts that
+ * meet its guard, sending some back.
  */
 class JaSaber : boost::noncopyable {
 public:
@@ -312,9 +322,21 @@ public:
     /** How the saber's box stands now: none while the saber shows no blade. */
     JaGuard guard() const;
 
-    /** The saber's defense rank, from 0, no defense at all, to kJaMaxDefense. */
-    int defense() const { return _defense; }
+    /**
+     * The saber's defense rank, from 0, no defense at all, to kJaMaxDefense:
+     * the one set by setDefense, if any, or else the character's, by its
+     * feats (jaDefenseFromFeats), the party leader's while saber mode is off.
+     */
+    int defense() const;
+
+    /** Sets the rank by hand, whatever the feats, as for a scripted check. */
     void setDefense(int defense);
+
+    /** Leaves the rank to the character's feats again. */
+    void setDefenseFromFeats();
+
+    /** Whether the rank comes from the character's feats, not setDefense. */
+    bool defenseFromFeats() const { return !_defenseSet.has_value(); }
 
     /**
      * The saber's answer to a bolt coming at \p boltPosition, as JA's bolt
@@ -379,7 +401,7 @@ private:
     bool _engage {false};
     uint32_t _engaged {0}; /**< the creature engaging goes for */
 
-    int _defense {kJaDefaultDefense};
+    std::optional<int> _defenseSet; /**< the rank setDefense gave, if any */
     float _boltParryReady {0.0f}; /**< the mode time from which the saber parries the next bolt */
     int _parryCount {0};
     JaFoes _foes;
