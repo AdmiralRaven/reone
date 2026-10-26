@@ -24,6 +24,7 @@
 #include "reone/game/d20/spell.h"
 #include "reone/game/game.h"
 #include "reone/game/jaconsole.h"
+#include "reone/game/jasaber.h"
 #include "reone/game/object/creature.h"
 #include "reone/game/object/item.h"
 #include "reone/resource/2da.h"
