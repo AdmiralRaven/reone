@@ -1040,6 +1040,13 @@ protected:
 
 } // namespace
 
+TEST(JaFoesRules, should_see_a_bolt_coming_as_long_before_as_ja_does_its_enemies_bolts) {
+    // JA's scanner looks 256 units out, and its enemies' E-11 bolts below
+    // hard difficulty fly 1150 units a second: about 0.22 s
+    EXPECT_NEAR(256.0f / 1150.0f, JaFoes::kBoltWarning, 1e-6f);
+    EXPECT_NEAR(0.2226f, JaFoes::kBoltWarning, 1e-3f);
+}
+
 TEST_F(JaSaberFoes, should_shoot_on_its_own_clock_and_hit_the_character_from_behind) {
     // given: a blaster 6 m behind the leader, who looks the other way, and
     // the shortest pauses between volleys
@@ -1252,7 +1259,7 @@ TEST_F(JaSaberFoes, should_send_a_bolt_back_through_a_friend_into_the_shooter) {
     EXPECT_LT(trooper->currentHitPoints(), 20);
 }
 
-TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_rounds_when_saber_mode_ends) {
+TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_round_when_saber_mode_ends) {
     // given: a blaster's bolts in flight
     auto trooper = addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
     auto attack = trooper->getCurrentAction();
@@ -1272,16 +1279,36 @@ TEST_F(JaSaberFoes, should_hand_the_attack_back_to_kotors_rounds_when_saber_mode
     // when: the round goes on
     play(1.5f);
 
-    // then: the attack went on by KOTOR's round, its blow landing 1 s in,
-    // with no more volleys of the real-time kind
+    // then: the real-time attack has had this round: no more volleys, and
+    // no KOTOR attack on top of it
     EXPECT_FALSE(attack->isCompleted());
-    EXPECT_LT(leader->currentHitPoints(), hitPoints);
+    EXPECT_EQ(hitPoints, leader->currentHitPoints());
     EXPECT_EQ(volleys, foes().counts().volleys);
 
     // when: the round ends
     play(1.0f);
 
     // then: the attack ends with it, for the end-of-round script to choose the next
+    EXPECT_TRUE(attack->isCompleted());
+}
+
+TEST_F(JaSaberFoes, should_not_land_a_kotor_shot_rolled_before_the_real_time_attack_took_over) {
+    // given: a KOTOR attack under way, its shot rolled at once and due 1 s in
+    foes().setEnabled(false);
+    auto trooper = addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol);
+    auto attack = trooper->getCurrentAction();
+    play(0.5f);
+    ASSERT_EQ(100, leader->currentHitPoints());
+
+    // when: real-time enemies take it over, then hand it back
+    foes().setEnabled(true);
+    play(1.0f);
+    foes().setEnabled(false);
+    int hitPoints = leader->currentHitPoints();
+    play(1.6f);
+
+    // then: the dropped shot never lands, and the attack ends with the round
+    EXPECT_EQ(hitPoints, leader->currentHitPoints());
     EXPECT_TRUE(attack->isCompleted());
 }
 

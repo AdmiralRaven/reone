@@ -240,10 +240,18 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
         return;
     }
     if (_realTime) {
-        // Saber mode ended mid-attack: the attack goes on by KOTOR's schedule,
-        // in the round it is already in.
+        // Saber mode ended mid-attack. What KOTOR rolled before it took over
+        // was dropped, and the real-time attack has had this round: it ends
+        // with the round, whose end-of-round script, KOTOR's AI, picks what
+        // comes next.
         _realTime = false;
         _handedBack = true;
+    }
+    if (_handedBack) {
+        if (_game.combat().addAction(self, actor).state == CombatRound::Finished) {
+            finish(attacker);
+        }
+        return;
     }
 
     if (!navigateToAttackTarget(attacker, *target, dt, _reachedTarget)) {
@@ -254,12 +262,6 @@ void AttackObjectAction::execute(std::shared_ptr<Action> self, Object &actor, fl
 
     const CombatRound &round = _game.combat().addAction(self, actor);
     AttackSchedule::State state = _schedule.update(round, *self, dt);
-    if (_handedBack && state == AttackSchedule::WaitAttack && round.state == CombatRound::Finished) {
-        // Handed back past its turn: the round has ended, its end-of-round
-        // script with it, and that script's choice comes next.
-        finish(attacker);
-        return;
-    }
 
     // Gameplay updates
     switch (state) {

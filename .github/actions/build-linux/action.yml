@@ -38,8 +38,8 @@ runs:
         working-directory: ${{github.workspace}}/build
         run: |-
           if [ -f ctest.txt ]; then
-            grep -E '^\[==========\]|^\[  PASSED  \]|^\[  SKIPPED \] [0-9]|tests passed|tests failed' ctest.txt | head -n 8 | sed 's/%/%25/g; s/^/::notice title=tests::/' || true
-            grep -E '^\[  FAILED  \] [A-Za-z]' ctest.txt | head -n 9 | sed 's/%/%25/g; s/^/::error title=failed test::/' || true
+            sed 's/^[0-9]*: //' ctest.txt | grep -E '^\[==========\]|^\[  PASSED  \]|^\[  SKIPPED \] [0-9]|tests passed|tests failed' | head -n 8 | sed 's/%/%25/g; s/^/::notice title=tests::/' || true
+            sed 's/^[0-9]*: //' ctest.txt | grep -E '^\[  FAILED  \] [A-Za-z]' | head -n 9 | sed 's/%/%25/g; s/^/::error title=failed test::/' || true
           fi
           if [ -f build.log ]; then
             grep -E ': (fatal )?error' build.log | head -n 9 | sed 's/%/%25/g; s/^/::error title=build::/' || true
