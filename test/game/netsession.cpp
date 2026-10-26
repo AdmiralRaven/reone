@@ -28,9 +28,13 @@
 #include "reone/game/party.h"
 #include "reone/game/savegame.h"
 #include "reone/game/script/runner.h"
+#include "reone/graphics/options.h"
+#include "reone/scene/graph.h"
 
 using namespace reone;
 using namespace reone::game;
+using namespace reone::graphics;
+using namespace reone::scene;
 using namespace testing;
 
 namespace {
@@ -62,7 +66,9 @@ struct Side {
         enemy->setCurrentHitPoints(20);
         enemy->setPosition(glm::vec3(0.0f, 5.0f, 0.0f));
         game.party().addMember(kNpcPlayer, pc);
-        game.party().addMember(0, companion);
+        // A companion joins the roster before the party, as KOTOR's do.
+        EXPECT_TRUE(game.party().addAvailableMember(0, companion));
+        EXPECT_TRUE(game.party().addMember(0, companion));
         game.party().setPlayer(pc);
         area->add(pc);
         area->add(companion);
@@ -76,6 +82,20 @@ struct Side {
     std::shared_ptr<Creature> pc;
     std::shared_ptr<Creature> companion;
     std::shared_ptr<Creature> enemy;
+};
+
+// One scene graph for both sides, which the engine's scene graphs give out,
+// set up before either side makes its area and cameras.
+struct SharedScene {
+    explicit SharedScene(TestEngine &engine) :
+        scene(std::make_unique<SceneGraph>("netsession", pipelineFactory, graphicsOptions,
+                                           engine.services().graphics, engine.services().audio, engine.services().resource)) {
+        ON_CALL(engine.sceneModule().graphs(), get(_)).WillByDefault(ReturnRef(*scene));
+    }
+
+    NiceMock<MockRenderPipelineFactory> pipelineFactory;
+    GraphicsOptions graphicsOptions;
+    std::unique_ptr<SceneGraph> scene;
 };
 
 // A clock both sides share, moved on by hand.
@@ -118,6 +138,7 @@ protected:
     }
 
     TestEngine &engine {testEngine()};
+    SharedScene scene {engine};
     Clock clock;
     Side host {engine};
     Side guest {engine};
@@ -352,4 +373,27 @@ TEST_F(NetSessionTest, should_bring_back_a_creature_the_host_has_alive_again) {
     // then
     EXPECT_FALSE(guest.enemy->isDead());
     EXPECT_EQ(10, guest.enemy->currentHitPoints());
+}
+
+TEST_F(NetSessionTest, should_run_from_each_games_own_loop) {
+    // given
+    host.game.openInGame();
+    guest.game.openInGame();
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+
+    // when: the games run, each updating its own side of the session
+    host.pc->setPosition(glm::vec3(2.0f, 3.0f, 0.0f));
+    for (int i = 0; i < 60; ++i) {
+        clock.time += 1.0 / 60.0;
+        host.game.update(1.0f / 60.0f);
+        guest.game.update(1.0f / 60.0f);
+    }
+
+    // then
+    EXPECT_TRUE(host.net().connected());
+    EXPECT_TRUE(guest.net().connected());
+    EXPECT_NEAR(2.0f, guest.pc->position().x, 1e-5f);
+    EXPECT_NEAR(3.0f, guest.pc->position().y, 1e-5f);
 }

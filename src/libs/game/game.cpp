@@ -3770,7 +3770,7 @@ void Game::stopMovement() {
 
 void Game::scheduleModuleTransition(const std::string &moduleName, const std::string &entry) {
     if (_followingHost) {
-        warn("net: the guest changes area only with the host, not to " + moduleName);
+        warn("net: the guest doesn't change area, to " + moduleName + " or any other; the host's changes don't reach it yet");
         return;
     }
     _nextModule = moduleName;
@@ -3780,7 +3780,7 @@ void Game::scheduleModuleTransition(const std::string &moduleName, const std::st
 
 void Game::scheduleModuleTransitionWithMovies(const std::string &moduleName, const std::string &entry, std::vector<std::string> movies) {
     if (_followingHost) {
-        warn("net: the guest changes area only with the host, not to " + moduleName);
+        warn("net: the guest doesn't change area, to " + moduleName + " or any other; the host's changes don't reach it yet");
         return;
     }
     _nextModule = moduleName;
