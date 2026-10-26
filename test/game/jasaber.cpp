@@ -1148,9 +1148,14 @@ TEST_F(JaSaberFoes, should_absorb_a_stopped_bolt_when_the_draw_to_send_it_back_c
 
 TEST_F(JaSaberFoes, should_aim_bolts_and_land_blows_only_as_kotors_roll_hits) {
     // given: a leader no roll but a natural 20 hits, with no defense; a
-    // blaster and a vibroblade behind it whose attacks aren't assured
+    // blaster and a vibroblade behind it whose attacks aren't assured; the
+    // shortest pauses, and bolts that miss passing straight over the head,
+    // as near the synthetic body's head as a miss can. Only KOTOR's roll is
+    // left to chance, so the checks below hold whatever the platform's
+    // random numbers, unless every roll comes up 20.
     setRandomSeed(36);
     game.jaSaber().setDefense(0);
+    foes().setRandom(drawing([](int low, int) { return low; }), [](float low, float high) { return low + (high - low) * 0.25f; });
     leader->applyEffect(std::make_shared<ACIncreaseEffect>(100, ACBonus::Deflection, kAllDamageTypeFlags), DurationType::Permanent);
     addFoe("trooper", glm::vec2(0.0f, -6.0f), kBlasterPistol, /*assuredHit=*/false);
     addFoe("blade", glm::vec2(0.0f, -1.2f), kVibroblade, /*assuredHit=*/false);
@@ -1158,15 +1163,19 @@ TEST_F(JaSaberFoes, should_aim_bolts_and_land_blows_only_as_kotors_roll_hits) {
     // when
     play(6.0f);
 
-    // then: bolts fired that weren't aimed, and only aimed ones hit; blows
-    // came that missed by the roll
+    // then, over the one KOTOR round the test has, with no end-of-round
+    // script to begin another: bolts fired that weren't aimed, and only
+    // aimed ones hit; blows came that missed by the roll; every swing but
+    // one cut short as the round ended came to a blow that missed or landed
     const auto &counts = foes().counts();
     EXPECT_GE(counts.bolts, 2);
     EXPECT_LT(counts.aimed, counts.bolts);
     EXPECT_LE(counts.hitCharacter, counts.aimed);
     EXPECT_GE(counts.swings, 2);
     EXPECT_GE(counts.blowsMissed, 1);
-    EXPECT_EQ(counts.swings, counts.blowsMissed + counts.blowsLanded);
+    EXPECT_EQ(0, counts.blowsParried);
+    EXPECT_LE(counts.blowsMissed + counts.blowsLanded, counts.swings);
+    EXPECT_GE(counts.blowsMissed + counts.blowsLanded, counts.swings - 1);
 }
 
 TEST_F(JaSaberFoes, should_not_defend_at_rank_0) {

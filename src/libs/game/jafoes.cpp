@@ -383,7 +383,23 @@ void JaFoes::fire(Foe &foe, const Foe::Shot &shot, Creature &attacker, Creature 
         side = glm::normalize(side);
         glm::vec3 up(glm::normalize(glm::cross(side, line)));
         float angle = _randomFloat(0.0f, glm::two_pi<float>());
-        aim += (side * std::cos(angle) + up * std::abs(std::sin(angle))) * kNearMiss;
+        glm::vec3 wide(side * std::cos(angle) + up * std::abs(std::sin(angle)));
+        // Farther out if the body as it stands now would still meet the bolt,
+        // as an arm held out or a tall head can: KOTOR's roll said it misses.
+        auto body = _saber.bodyParts();
+        glm::vec3 center(aim);
+        for (float reach = 1.0f; reach <= 3.0f; reach += 1.0f) {
+            aim = center + wide * (kNearMiss * reach);
+            glm::vec3 path(aim - bolt.position);
+            float length = glm::length(path);
+            if (length < kEpsilon) {
+                break;
+            }
+            glm::vec3 beyond(bolt.position + path * ((length + 2.0f * kNearMiss) / length));
+            if (!jaSweepBall(bolt.position, beyond, kBoltRadius, body)) {
+                break;
+            }
+        }
     }
     glm::vec3 direction(aim - bolt.position);
     if (glm::length(direction) < kEpsilon) {
