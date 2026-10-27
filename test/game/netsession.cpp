@@ -749,7 +749,8 @@ TEST_F(NetSessionTest, should_hold_a_command_file_until_the_guests_hero_is_here)
     EXPECT_TRUE(host.game.holdsScriptedCommands());
     for (int frame = 0; frame < 120 && guest.game.holdsScriptedCommands(); ++frame) {
         exchange(1);
-        if (guest.game.holdsScriptedCommands()) {
+        if (guest.game.holdsScriptedCommands() && guest.net().heroId()) {
+            // made, but not yet leading: still holding
             EXPECT_NE(guest.game.party().getLeader(), guest.game.getObjectById<Creature>(guest.net().heroId()));
         }
     }
