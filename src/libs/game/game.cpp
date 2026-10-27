@@ -1708,6 +1708,7 @@ void Game::retireRuntimeSession() {
     }
     retireSavedObjectGraph();
     _publishedRuntimeObjectIds.clear();
+    _sessionOnlyObjects.clear();
     _nextObjectId = kFirstRuntimeObjectId;
     _effectIds.reset();
     _worldTimeMilliseconds = 0;
@@ -4045,6 +4046,12 @@ bool Game::keepsRunningUnfocused() const {
     return _netSession && _netSession->role() != NetRole::None;
 }
 
+bool Game::holdsScriptedCommands() const {
+    // Character creation making a session's hero holds them too, until it
+    // quits: a "quit" after netheromake ends a build that doesn't know it.
+    return (_netSession && _netSession->holdsCommands()) || _sessionHeroFile.has_value();
+}
+
 void Game::withLoadingScreen(const std::string &imageResRef, const std::function<void()> &block) {
     if (!_loadScreen) {
         _loadScreen = tryLoadGUI<LoadingScreen>();
@@ -5486,6 +5493,10 @@ void Game::makeSessionHero(const std::string &path) {
     }
     _sessionHeroFile = path;
     startCharacterGeneration();
+    if (!_charGen) {
+        _sessionHeroFile.reset();
+        throw std::runtime_error("KOTOR's character creation didn't load");
+    }
 }
 
 void Game::startCharacterGeneration() {

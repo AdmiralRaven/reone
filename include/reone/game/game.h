@@ -215,6 +215,12 @@ public:
 
     /** Whether the game goes on with its window out of focus: while a two-player session runs. */
     bool keepsRunningUnfocused() const;
+
+    /**
+     * Whether a command file waits for something in the game: netwait, for
+     * the other side of a session, or netheromake, for character creation.
+     */
+    bool holdsScriptedCommands() const;
     Combat &combat() { return _combat; }
     Journal &journal() { return _journal; }
     MessageLog &messageLog() { return _messageLog; }
@@ -557,7 +563,12 @@ public:
     /** Where character creation writes the hero it makes, while it makes one. */
     const std::optional<std::string> &sessionHeroFile() const { return _sessionHeroFile; }
 
-    /** Whether the object is left out of saves and of a session's object check, as a second hero is. */
+    /**
+     * Whether the object is left out of saves and of a session's object check,
+     * as a second hero is. An ID stays so until a load, even once its object is
+     * destroyed: the area destroys objects later, and no new object takes an ID
+     * already used before a load.
+     */
     bool isSessionOnly(uint32_t id) const { return _sessionOnlyObjects.count(id) > 0; }
     void setSessionOnly(uint32_t id, bool sessionOnly) {
         if (sessionOnly) {

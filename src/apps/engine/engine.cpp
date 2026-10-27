@@ -361,6 +361,9 @@ void Engine::processScriptedCommands(bool &quit) {
             return;
         }
     }
+    if (_game->holdsScriptedCommands()) {
+        return;
+    }
 
     while (!_scriptedCommands.empty()) {
         std::string command(std::move(_scriptedCommands.front()));
@@ -374,7 +377,7 @@ void Engine::processScriptedCommands(bool &quit) {
         if (_captureRequest) {
             return;
         }
-        if (_scriptPauseFrames > 0) {
+        if (_scriptPauseFrames > 0 || _game->holdsScriptedCommands()) {
             return;
         }
     }

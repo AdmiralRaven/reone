@@ -153,8 +153,9 @@ struct NetCreatureState {
  *
  * Messages are little-endian, each starting with "RNET", the protocol
  * version and a type. Nothing is retried: a newer snapshot replaces a lost
- * one. The guest's hero stands in for a second hero: it is one of KOTOR's
- * party members, a fallback for the test, not a custom character.
+ * one. The guest's hero is either one of KOTOR's party members, a fallback
+ * for the test, or, with kNpcSessionHero, a hero of the guest's own, which
+ * the guest sends and both sides make for the session only (HeroSpec).
  */
 class NetSession : boost::noncopyable {
 public:
@@ -164,15 +165,20 @@ public:
     /** How long without a message before the other side counts as gone, in seconds of real time. */
     static constexpr float kTimeout = 5.0f;
 
-    static constexpr uint16_t kProtocol = 2; /**< 2: snapshots carry the host's pause in a fight */
+    /**
+     * 2: snapshots carry the host's pause in a fight; 3: hellos, HeroSpec and
+     * HeroReady carry each side's session number, so that a side that starts
+     * over, or joins again, is told apart from one still there.
+     */
+    static constexpr uint16_t kProtocol = 3;
 
     enum class MessageType : uint8_t {
         Hello = 1,
         Snapshot = 2,
         GuestState = 3,
         GuestHit = 4,
-        HeroSpec = 5, /**< the guest's own hero, as writeNetHero has it */
-        HeroReady = 6 /**< the host made it: its ID and where it stands */
+        HeroSpec = 5, /**< the guest's own hero, as writeNetHero has it, for the guest's session number */
+        HeroReady = 6 /**< the host made it, in the host's session: its ID and where it stands */
     };
 
     NetSession(Game &game, ServicesView &services);
@@ -216,6 +222,16 @@ public:
 
     /** Ends the session; \p reason is logged. */
     void stop(const std::string &reason = std::string());
+
+    /**
+     * Holds a command file, as a PC script's scripted start, until the two
+     * sides have joined up and, with a hero of the guest's own, the hero is
+     * in play on this side; at most \p seconds of real time. Logs how it went.
+     */
+    void waitForPeer(float seconds);
+
+    /** Whether waitForPeer still holds the command file. */
+    bool holdsCommands() const { return _waitUntil > 0.0; }
 
     /**
      * Every frame, after the module's update, paused or not, but not while
@@ -281,6 +297,12 @@ private:
     bool _holding {false};
     double _holdUntil {0.0};
     bool _warnedNoHero {false};
+    uint32_t _session {0};               /**< this side's session number, fresh each nethost or netjoin */
+    std::optional<uint32_t> _peerSession; /**< the other side's, from its hellos */
+    uint32_t _heroSession {0};           /**< on the host, the guest's session the hero was made for */
+    uint32_t _refusedHeroSession {0};    /**< on the host, the guest's session whose hero was refused, warned of once */
+    double _waitStarted {0.0};
+    double _waitUntil {0.0};
     bool _hostPausedInFight {false};
     std::optional<Character> _hero; /**< the guest's own hero, to send; the host's copy once received */
     uint32_t _heroId {0};
@@ -298,6 +320,8 @@ private:
     void followHostPause(bool pausedInFight);
     void sendHeroSpec();
     void sendHeroReady();
+    bool peerReady() const;
+    void checkWait();
     void handleHeroSpec(const std::vector<uint8_t> &bytes);
     void handleHeroReady(const std::vector<uint8_t> &bytes);
     void removeHero();

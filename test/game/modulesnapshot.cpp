@@ -400,14 +400,30 @@ TEST_F(SnapshotFixture, k1_active_member_exclusion_is_unchanged) {
 }
 
 TEST_F(SnapshotFixture, leaves_a_two_player_sessions_second_hero_out) {
-    // given: a second hero, session-only, and another creature beside it
-    auto hero = game.newCreature();
+    // given: a second hero, session-only, at an ID far above the game's, as a
+    // session makes it, another creature beside it, and the PC attacking it
+    auto hero = game.newCreatureAtId(0x40001234u);
+    ASSERT_TRUE(hero);
     hero->setTag("coop_hero");
     TestGameModule::addSnapshotObject(*area, hero);
     game.setSessionOnly(hero->id(), true);
     auto other = game.newCreature();
     other->setTag("end_trask");
     TestGameModule::addSnapshotObject(*area, other);
+    auto attack = game.newAction<AttackObjectAction>(hero);
+    SavedActionRecord provenance;
+    provenance.groupActionId = 29;
+    attack->attachSavedAction(provenance);
+    player->addAction(attack);
+    // and: a delayed command of the hero's own, as a script could give it
+    auto program = std::make_shared<script::ScriptProgram>("hero_delay");
+    program->add(script::Instruction(script::InstructionType::RETN));
+    auto state = std::make_shared<script::ExecutionState>();
+    state->program = std::move(program);
+    state->insOffset = 13;
+    auto context = std::make_shared<script::ExecutionContext>();
+    context->savedState = std::move(state);
+    hero->delayAction(game.newAction<DoCommandAction>(std::move(context)), 5.0f);
 
     // when
     auto saved = ModuleSnapshotBuilder(game, "module_k1_party").build();
@@ -420,6 +436,21 @@ TEST_F(SnapshotFixture, leaves_a_two_player_sessions_second_hero_out) {
     }
     EXPECT_EQ(ids.end(), std::find(ids.begin(), ids.end(), hero->id()));
     EXPECT_NE(ids.end(), std::find(ids.begin(), ids.end(), other->id()));
+    // and: the save's next ID stays below the hero's
+    EXPECT_LT(saved.snapshot->ifo->getUint("Mod_NextObjId0"), 0x40001234u);
+    // and: the PC's attack points at nothing
+    auto ifo = readGff(saved.snapshot->ifoBytes);
+    auto playerRecord = ifo->getList("Mod_PlayerList").front();
+    ASSERT_EQ(playerRecord->getList("ActionList").size(), 1u);
+    auto savedAttack = SavedActionRecord::fromGff(
+        *playerRecord->getList("ActionList").front(),
+        SerializedIdentityContext::moduleGraph("module_k1_party"));
+    ASSERT_EQ(savedAttack.parameters.size(), 10u);
+    EXPECT_EQ(std::get<SavedObjectReference>(savedAttack.parameters[1].payload).id,
+              kSavedRuntimeInvalidObjectId);
+    // and: the hero's delayed command is left out with it
+    auto queue = SavedEventQueue::fromGff(*ifo, SerializedIdentityContext::moduleGraph("module_k1_party"));
+    EXPECT_TRUE(queue.events.empty());
 }
 
 TEST_F(SnapshotFixture, writes_and_reopens_complete_deterministic_module_state) {

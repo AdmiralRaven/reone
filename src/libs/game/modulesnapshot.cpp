@@ -598,6 +598,10 @@ ModuleObjectIdContext ModuleSnapshotBuilder::buildObjectIdContext(
         if (object->type() == ObjectType::Creature &&
             _game._party.isRetainedRuntimeRepresentation(
                 *static_cast<const Creature *>(object.get()))) continue;
+        // A two-player session's second hero gets no saved ID, so the save's
+        // next ID stays below the hero's, and what points at it saves as
+        // pointing at nothing.
+        if (_game.isSessionOnly(object->id())) continue;
         if (ownsSavedObjectIdentity(object->type())) {
             addObject(*object);
         }
@@ -1727,7 +1731,8 @@ std::shared_ptr<Gff> ModuleSnapshotBuilder::buildIfo(
     appendOwner(_game._module);
     appendOwner(module._area);
     for (const auto &object : area._objects) {
-        if (object && area._objectsToDestroy.count(object->id()) == 0) {
+        if (object && area._objectsToDestroy.count(object->id()) == 0 &&
+            !_game.isSessionOnly(object->id())) {
             appendOwner(object);
         }
     }

@@ -55,7 +55,6 @@
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
 #include "reone/system/logutil.h"
-#include "reone/system/randomutil.h"
 
 #include <chrono>
 #include <fstream>
@@ -293,6 +292,24 @@ std::pair<int, int> toPair(const std::string &value, const std::string &key) {
 
 constexpr uint32_t kFirstHeroId = 0x40000000;
 
+// The longest name a hero keeps, in bytes, on both sides.
+constexpr size_t kMaxHeroName = 64;
+
+// A number no other session drew: not from the game's random numbers, which
+// both sides seed alike, and which the host's rolls must keep to themselves.
+uint32_t freshNumber() {
+    static uint32_t drawn = 0;
+    uint64_t x = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) ^
+                 (static_cast<uint64_t>(++drawn) << 40) ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&drawn));
+    // splitmix64's finish, so that close clocks give far numbers.
+    x += 0x9e3779b97f4a7c15ull;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+    x ^= x >> 31;
+    uint32_t number = static_cast<uint32_t>(x) ^ static_cast<uint32_t>(x >> 32);
+    return number ? number : 1;
+}
+
 // "Revan, a level 1 Soldier", for the log.
 std::string heroSummary(const Character &hero) {
     std::string classes;
@@ -311,6 +328,8 @@ std::string writeNetHero(const Character &character) {
     std::string name(character.name);
     boost::replace_all(name, "\n", " ");
     boost::replace_all(name, "\r", " ");
+    // As readNetHero takes it, so that both sides show the same name.
+    name = boost::trim_copy(name).substr(0, kMaxHeroName);
     out << "reone-hero 1\n";
     out << "name=" << name << "\n";
     out << "gender=" << (character.gender == Gender::Female ? "female" : "male") << "\n";
@@ -363,7 +382,7 @@ Character readNetHero(const std::string &text, IClasses &classes) {
         std::string key(boost::trim_copy(line.substr(0, equals)));
         std::string value(boost::trim_copy(line.substr(equals + 1)));
         if (key == "name") {
-            character.name = value.substr(0, 64);
+            character.name = value.substr(0, kMaxHeroName);
         } else if (key == "gender") {
             if (value != "male" && value != "female") {
                 throw std::runtime_error("The hero's gender is male or female, not " + value);
@@ -702,6 +721,7 @@ void NetSession::host(uint16_t port, int guestNpc) {
     }
     _socket.open(port);
     _role = NetRole::Host;
+    _session = freshNumber();
     _lastHeard = now();
     // The host plays the PC, whichever member the save had leading.
     _game.party().setPartyLeader(kNpcPlayer);
@@ -738,6 +758,7 @@ void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
     _socket.open(0);
     _peer = *address;
     _role = NetRole::Guest;
+    _session = freshNumber();
     _lastHeard = now();
     // The guest's controls, camera and saber mode drive its hero; a hero of
     // its own leads once the host has made it.
@@ -784,6 +805,7 @@ void NetSession::stop(const std::string &reason) {
     _role = NetRole::None;
     _connected = false;
     _manifestsMatch.reset();
+    _peer = NetSocket::Address();
     _refused = NetSocket::Address();
     _sequence = 0;
     _lastReceived = 0;
@@ -793,8 +815,59 @@ void NetSession::stop(const std::string &reason) {
     _holding = false;
     _holdUntil = 0.0;
     _warnedNoHero = false;
+    _session = 0;
+    _peerSession.reset();
+    _heroSession = 0;
+    _refusedHeroSession = 0;
+    _waitStarted = 0.0;
+    _waitUntil = 0.0;
     _unknownIds.clear();
     _counts = Counts();
+}
+
+void NetSession::waitForPeer(float seconds) {
+    if (_role == NetRole::None) {
+        throw std::runtime_error("No session: nethost or netjoin first");
+    }
+    if (seconds <= 0.0f) {
+        throw std::runtime_error("Wait a positive number of seconds");
+    }
+    _waitStarted = now();
+    _waitUntil = _waitStarted + seconds;
+    info(str(boost::format("net: waiting up to %.0f s for %s") % seconds %
+             (_guestNpc == kNpcSessionHero ? "the guest's hero" : (_role == NetRole::Host ? "the guest" : "the host"))));
+    checkWait();
+}
+
+bool NetSession::peerReady() const {
+    if (!_connected) {
+        return false;
+    }
+    if (_guestNpc != kNpcSessionHero) {
+        return true;
+    }
+    auto hero = guestHero();
+    // On the guest, the hero is in play once it leads, for the controls and saber mode.
+    return hero && (_role == NetRole::Host || _game.party().getLeader() == hero);
+}
+
+void NetSession::checkWait() {
+    if (_waitUntil <= 0.0) {
+        return;
+    }
+    double time = now();
+    if (peerReady()) {
+        auto hero = guestHero();
+        info(str(boost::format("net: waited %.1f s; %s") % (time - _waitStarted) %
+                 (_guestNpc == kNpcSessionHero ? "the guest's hero is here, " + (hero ? hero->tag() : std::string()) +
+                                                     (_role == NetRole::Guest ? ", leading this side" : "")
+                                               : std::string("the other side is here"))));
+        _waitUntil = 0.0;
+    } else if (time >= _waitUntil) {
+        warn(str(boost::format("net: waited %.0f s, and %s; going on") % (time - _waitStarted) %
+                 (!_connected ? "the other side isn't here" : "the guest's hero isn't here")));
+        _waitUntil = 0.0;
+    }
 }
 
 uint64_t NetSession::manifestHash() const {
@@ -835,6 +908,7 @@ void NetSession::sendHello() {
     putU64(out, manifestHash());
     auto module = _game.module();
     putU32(out, module && module->area() ? static_cast<uint32_t>(module->area()->objects().size()) : 0);
+    putU32(out, _session);
     _socket.send(_peer, out);
     ++_counts.sent;
 }
@@ -917,6 +991,8 @@ void NetSession::update() {
         info(str(boost::format("net: nothing from %s for %.0f s") % _peer.str() % kTimeout));
         _connected = false;
     }
+    // A command file waiting for the other side goes on once it is here.
+    checkWait();
 
     _sinceSend += elapsed;
     _sinceHello += elapsed;
@@ -983,7 +1059,8 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         int npc = static_cast<int>(in.u32());
         uint64_t manifest = in.u64();
         uint32_t objects = in.u32();
-        if (!in.ok()) {
+        uint32_t session = in.u32();
+        if (!in.ok() || !session) {
             ++_counts.rejected;
             return;
         }
@@ -997,23 +1074,37 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             }
             return;
         }
-        if (newGuest) {
+        // The same side, started over or joined again, with a new session
+        // number: it counts its messages from 1 again.
+        bool startedOver = !newGuest && _peerSession && session != *_peerSession;
+        if (newGuest || (startedOver && _role == NetRole::Host)) {
             _peer = datagram.from;
             _lastReceived = 0;
             _connected = false;
-            ++_counts.received;
-            _lastHeard = now();
+            if (newGuest) {
+                ++_counts.received;
+                _lastHeard = now();
+            }
         }
+        if (startedOver && _role == NetRole::Guest) {
+            _lastReceived = 0;
+            if (_guestNpc == kNpcSessionHero && _heroId) {
+                // Its game has no hero now: this side's goes, and is sent again.
+                removeHero();
+                _sinceHeroSpec = kHelloInterval;
+                info(str(boost::format("net: the host %s started over; this side's hero comes again once it is made there") %
+                         _peer.str()));
+            } else {
+                info(str(boost::format("net: the host %s started over") % _peer.str()));
+            }
+        }
+        _peerSession = session;
         uint64_t mine = manifestHash();
         bool match = manifest == mine;
         bool first = !_connected;
         bool changed = _manifestsMatch && *_manifestsMatch != match;
         _manifestsMatch = match;
         _connected = true;
-        if (_role == NetRole::Guest && sequence < _lastReceived) {
-            // A host that started over counts from 1 again.
-            _lastReceived = 0;
-        }
         if (first) {
             info(str(boost::format("net: %s %s is here, playing party member %d; objects %s: %d there, %016x, and %016x here") %
                      roleName(role) % _peer.str() % npc % (match ? "match" : "DIFFER") % objects % manifest % mine));
@@ -1066,7 +1157,11 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         auto hero = guestHero();
         if (in.ok() && !hero && !_warnedNoHero) {
             _warnedNoHero = true;
-            warn(str(boost::format("net: party member %d, the guest's hero, isn't in the host's party now") % _guestNpc));
+            if (_guestNpc == kNpcSessionHero) {
+                warn("net: the guest plays a hero this side hasn't made; the guest sends it again once it hears this side");
+            } else {
+                warn(str(boost::format("net: party member %d, the guest's hero, isn't in the host's party now") % _guestNpc));
+            }
         }
         if (!in.ok() || !hero || state.id != hero->id()) {
             ++_counts.rejected;
@@ -1183,6 +1278,7 @@ void NetSession::sendHeroSpec() {
     }
     auto out = header(MessageType::HeroSpec);
     std::string text(writeNetHero(*_hero));
+    putU32(out, _session);
     putU16(out, static_cast<uint16_t>(text.size()));
     out.insert(out.end(), text.begin(), text.end());
     _socket.send(_peer, out);
@@ -1195,6 +1291,7 @@ void NetSession::sendHeroReady() {
         return;
     }
     auto out = header(MessageType::HeroReady);
+    putU32(out, _session);
     putU32(out, hero->id());
     putF32(out, hero->position().x);
     putF32(out, hero->position().y);
@@ -1209,25 +1306,38 @@ void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
         ++_counts.rejected;
         return;
     }
-    if (_heroId) {
-        // Made already: the guest hasn't heard.
-        sendHeroReady();
-        return;
-    }
     Reader in(bytes, kHeaderSize);
+    uint32_t session = in.u32();
     uint16_t size = in.u16();
-    if (!in.ok() || kHeaderSize + 2 + size > bytes.size()) {
+    constexpr size_t kTextAt = kHeaderSize + 4 + 2;
+    if (!in.ok() || !session || kTextAt + size > bytes.size()) {
         ++_counts.rejected;
         return;
     }
-    std::string text(bytes.begin() + kHeaderSize + 2, bytes.begin() + kHeaderSize + 2 + size);
+    if (_heroId && session == _heroSession) {
+        // Made already, for this guest: it hasn't heard.
+        sendHeroReady();
+        return;
+    }
+    std::string text(bytes.begin() + kTextAt, bytes.begin() + kTextAt + size);
     Character character;
     try {
         character = readNetHero(text, _services.game.classes);
     } catch (const std::exception &e) {
         ++_counts.rejected;
-        warn(std::string("net: the guest's hero won't do: ") + e.what());
+        if (_refusedHeroSession != session) {
+            // Once per guest: it sends the hero again every half second.
+            _refusedHeroSession = session;
+            warn(std::string("net: the guest's hero won't do: ") + e.what());
+        }
         return;
+    }
+    if (_heroId) {
+        // A guest that joined again, maybe with another hero: the earlier
+        // one goes, and this one comes at an ID of its own.
+        info("net: the guest joined again; its earlier hero, " + (_hero ? _hero->name : std::string("unnamed")) + ", goes");
+        removeHero();
+        _hero.reset();
     }
     auto pc = _game.party().player();
     auto module = _game.module();
@@ -1238,7 +1348,7 @@ void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
     // neither side has used this session.
     std::shared_ptr<Creature> hero;
     for (int attempt = 0; attempt < 16 && !hero; ++attempt) {
-        hero = makeNetHero(_game, kFirstHeroId + static_cast<uint32_t>(randomInt(0, 0xffffff)), character);
+        hero = makeNetHero(_game, kFirstHeroId + (freshNumber() & 0xffffffu), character);
     }
     if (!hero) {
         warn("net: no ID free for the guest's hero");
@@ -1252,6 +1362,7 @@ void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
     module->area()->determineObjectRoom(*hero);
     _hero = character;
     _heroId = hero->id();
+    _heroSession = session;
     info(str(boost::format("net: the guest's hero joins: %s, at %.2f %.2f") % heroSummary(character) %
              hero->position().x % hero->position().y));
     sendHeroReady();
@@ -1262,6 +1373,7 @@ void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
         return;
     }
     Reader in(bytes, kHeaderSize);
+    uint32_t session = in.u32();
     uint32_t id = in.u32();
     glm::vec3 position;
     position.x = in.f32();
@@ -1271,6 +1383,11 @@ void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
     auto module = _game.module();
     if (!in.ok() || !module || !module->area()) {
         ++_counts.rejected;
+        return;
+    }
+    if (!_peerSession || session != *_peerSession) {
+        // For a host session that is over: the hero comes from the one now.
+        ++_counts.stale;
         return;
     }
     auto hero = makeNetHero(_game, id, *_hero);
@@ -1305,7 +1422,9 @@ void NetSession::removeHero() {
             module->area()->destroyObject(*hero);
         }
     }
-    _game.setSessionOnly(_heroId, false);
+    // The ID stays session-only: the area destroys the hero later, and until
+    // then it is still among its objects. No other object gets the ID again
+    // before a load, which forgets it (Game::setSessionOnly).
     _heroId = 0;
 }
 
@@ -1461,6 +1580,17 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
                                     throw std::runtime_error("Usage: netheromake <file>");
                                 }
                                 game.makeSessionHero(std::string(*args[1]));
+                            }));
+    console.registerCommand("netwait", "hold a command file until the other side, and with hero the guest's hero, is here: netwait [seconds, 60]",
+                            logged("netwait", [&game](const ConsoleArgs &args) {
+                                if (args.size() > 2) {
+                                    throw std::runtime_error("Usage: netwait [seconds]");
+                                }
+                                int seconds = args.size() > 1 ? args.get<int>(1).value_or(-1) : 60;
+                                if (seconds < 1) {
+                                    throw std::runtime_error("Usage: netwait [seconds], where seconds is positive");
+                                }
+                                game.netSession().waitForPeer(static_cast<float>(seconds));
                             }));
     console.registerCommand("netstatus", "log the two-player session's state and counts: netstatus",
                             logged("netstatus", [&game, print](const ConsoleArgs &) {

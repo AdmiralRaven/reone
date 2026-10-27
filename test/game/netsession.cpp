@@ -574,6 +574,22 @@ TEST_F(NetSessionTest, should_make_a_hero_only_from_the_main_menu) {
     // a game is loaded: character creation would drop it
     EXPECT_THROW(host.game.makeSessionHero("hero.txt"), std::runtime_error);
     EXPECT_FALSE(host.game.sessionHeroFile());
+    // and a command file isn't held for it
+    EXPECT_FALSE(host.game.holdsScriptedCommands());
+}
+
+TEST(NetHero, should_keep_a_name_of_64_bytes_on_both_sides) {
+    HeroClasses classes;
+    NiceMock<MockClasses> lookup;
+    ON_CALL(lookup, get(ClassType::Soldier)).WillByDefault(Return(classes.soldier));
+    auto hero = classes.hero("  " + std::string(100, 'a') + "  ");
+
+    auto text = writeNetHero(hero);
+    auto back = readNetHero(text, lookup);
+
+    EXPECT_NE(std::string::npos, text.find("name=" + std::string(64, 'a') + "\n"));
+    EXPECT_EQ(std::string(64, 'a'), back.name);
+    EXPECT_EQ(text, writeNetHero(back));
 }
 
 TEST(NetHero, should_refuse_what_isnt_a_hero) {
@@ -632,10 +648,128 @@ TEST_F(NetSessionTest, should_bring_the_guests_own_hero_into_both_games_and_take
 
     // then: the hero goes with it, and the guest's PC leads again
     EXPECT_EQ(0u, guest.net().heroId());
-    EXPECT_FALSE(host.game.isSessionOnly(id));
+    EXPECT_EQ(0u, host.net().heroId());
+    // out of saves and the object check until the area has destroyed it, and
+    // after: no object takes its ID again before a load
+    EXPECT_TRUE(host.game.isSessionOnly(id));
     EXPECT_EQ(guest.pc, guest.game.party().getLeader());
     EXPECT_FALSE(guest.game.party().isMember(*onGuest));
     // the guest's hero stays set, for the next session
     ASSERT_TRUE(guest.net().hero());
     EXPECT_EQ("Shan Varra", guest.net().hero()->name);
+}
+
+TEST_F(NetSessionTest, should_let_the_guest_join_again_with_another_hero) {
+    // given: the guest has played a hero, and left
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    uint32_t first = host.net().heroId();
+    ASSERT_NE(0u, first);
+    ASSERT_EQ(first, guest.net().heroId());
+    guest.net().stop("the test leaves");
+
+    // when: it joins again, with another hero
+    guest.net().setHero(classes.hero("Kel Dorn"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+
+    // then: both sides have the new hero, at a new ID, and it plays
+    uint32_t second = host.net().heroId();
+    ASSERT_NE(0u, second);
+    EXPECT_NE(first, second);
+    EXPECT_EQ(second, guest.net().heroId());
+    auto onHost = host.game.getObjectById<Creature>(second);
+    auto onGuest = guest.game.getObjectById<Creature>(second);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ("Kel Dorn", onHost->name());
+    EXPECT_EQ(onGuest, guest.game.party().getLeader());
+    onGuest->setPosition(glm::vec3(-3.0f, 2.0f, 0.0f));
+    exchange(12);
+    EXPECT_NEAR(-3.0f, onHost->position().x, 1e-5f);
+    // and: the first is on its way out on the host, its ID out of the object check
+    EXPECT_TRUE(host.game.isSessionOnly(first));
+    EXPECT_EQ(std::optional<bool>(true), host.net().manifestsMatch());
+}
+
+TEST_F(NetSessionTest, should_bring_the_hero_again_when_the_host_starts_over) {
+    // given: a guest playing its hero
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    uint32_t first = guest.net().heroId();
+    ASSERT_NE(0u, first);
+
+    // when: the host ends its session and hosts again, on the same port,
+    // while the guest stays; the guest says hello every 2 s
+    host.net().stop("the test starts over");
+    host.net().host(hostPort, kNpcSessionHero);
+    exchange(200);
+
+    // then: the hero is made again, at a new ID, and the guest plays it
+    uint32_t second = host.net().heroId();
+    ASSERT_NE(0u, second);
+    EXPECT_NE(first, second);
+    EXPECT_EQ(second, guest.net().heroId());
+    auto onHost = host.game.getObjectById<Creature>(second);
+    auto onGuest = guest.game.getObjectById<Creature>(second);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ(onGuest, guest.game.party().getLeader());
+    onGuest->setPosition(glm::vec3(-3.0f, 2.0f, 0.0f));
+    exchange(12);
+    EXPECT_NEAR(-3.0f, onHost->position().x, 1e-5f);
+}
+
+TEST_F(NetSessionTest, should_hold_a_command_file_until_the_guests_hero_is_here) {
+    // given
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    EXPECT_THROW(guest.net().waitForPeer(60.0f), std::runtime_error); // no session
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+
+    // when
+    guest.net().waitForPeer(60.0f);
+    host.net().waitForPeer(60.0f);
+
+    // then: both hold until the hero is here, the guest's leading
+    EXPECT_TRUE(guest.game.holdsScriptedCommands());
+    EXPECT_TRUE(host.game.holdsScriptedCommands());
+    for (int frame = 0; frame < 120 && guest.game.holdsScriptedCommands(); ++frame) {
+        exchange(1);
+        if (guest.game.holdsScriptedCommands()) {
+            EXPECT_NE(guest.game.party().getLeader(), guest.game.getObjectById<Creature>(guest.net().heroId()));
+        }
+    }
+    EXPECT_FALSE(guest.game.holdsScriptedCommands());
+    ASSERT_NE(0u, guest.net().heroId());
+    EXPECT_EQ(guest.game.getObjectById<Creature>(guest.net().heroId()), guest.game.party().getLeader());
+    exchange(6);
+    EXPECT_FALSE(host.game.holdsScriptedCommands());
+}
+
+TEST_F(NetSessionTest, should_stop_holding_a_command_file_after_its_time) {
+    // given: a host no guest joins
+    host.net().host(0, kNpcSessionHero);
+
+    // when
+    host.net().waitForPeer(1.0f);
+    exchange(30);
+
+    // then: half the time, still holding; after it, going on
+    EXPECT_TRUE(host.game.holdsScriptedCommands());
+    exchange(40);
+    EXPECT_FALSE(host.game.holdsScriptedCommands());
 }
