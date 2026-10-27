@@ -168,9 +168,11 @@ public:
     /**
      * 2: snapshots carry the host's pause in a fight; 3: hellos, HeroSpec and
      * HeroReady carry each side's session number, so that a side that starts
-     * over, or joins again, is told apart from one still there.
+     * over, or joins again, is told apart from one still there; 4: every
+     * message carries it, and hellos when the session began, so that a late
+     * message from an earlier session is dropped.
      */
-    static constexpr uint16_t kProtocol = 3;
+    static constexpr uint16_t kProtocol = 4;
 
     enum class MessageType : uint8_t {
         Hello = 1,
@@ -277,6 +279,9 @@ public:
     /** On the guest, whether the host has paused in a fight, which pauses this side too. */
     bool hostPausedInFight() const { return _hostPausedInFight; }
 
+    /** The other side's session number, from its hellos; none before the first. */
+    std::optional<uint32_t> peerSession() const { return _peerSession; }
+
     /** Whether the other side's objects matched this side's; none until its hello arrived. */
     std::optional<bool> manifestsMatch() const { return _manifestsMatch; }
 
@@ -298,8 +303,9 @@ private:
     double _holdUntil {0.0};
     bool _warnedNoHero {false};
     uint32_t _session {0};               /**< this side's session number, fresh each nethost or netjoin */
-    std::optional<uint32_t> _peerSession; /**< the other side's, from its hellos */
-    std::set<uint32_t> _retiredPeerSessions; /**< the other side's sessions before, whose late messages are dropped */
+    uint64_t _sessionStart {0};          /**< when this side's session began, by its wall clock, later than any before */
+    std::optional<uint32_t> _peerSession; /**< the other side's, from its hellos: only its messages are taken */
+    uint64_t _peerSessionStart {0};      /**< when the other side's began, by its clock: an earlier one is late */
     uint32_t _heroSession {0};           /**< on the host, the guest's session the hero was made for */
     uint32_t _refusedHeroSession {0};    /**< on the host, the guest's session whose hero was refused, warned of once */
     double _waitStarted {0.0};
@@ -323,7 +329,7 @@ private:
     void sendHeroReady();
     bool peerReady() const;
     void checkWait();
-    void handleHeroSpec(const std::vector<uint8_t> &bytes);
+    void handleHeroSpec(const std::vector<uint8_t> &bytes, uint32_t session);
     void handleHeroReady(const std::vector<uint8_t> &bytes);
     void removeHero();
     std::vector<uint8_t> header(MessageType type);

@@ -101,6 +101,7 @@
 #include "reone/system/di/services.h"
 #include "reone/system/exception/validation.h"
 #include "reone/system/fileutil.h"
+#include "reone/system/logger.h"
 #include "reone/system/logutil.h"
 #include "reone/system/randomutil.h"
 #include "reone/system/smallset.h"
@@ -5494,6 +5495,8 @@ void Game::makeSessionHero(const std::string &path) {
     _sessionHeroFile = path;
     // For a PC script: a build that logs this holds the command file for it.
     info("net: character creation opens for the session's hero, to " + path);
+    // Written now, so that the line is there even if the engine stops in it.
+    Logger::instance.flush();
     startCharacterGeneration();
     if (!_charGen) {
         _sessionHeroFile.reset();

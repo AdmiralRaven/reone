@@ -778,15 +778,22 @@ TEST_F(NetSessionTest, should_stop_holding_a_command_file_after_its_time) {
 namespace {
 
 // Stands between the guest and the host, so that the host hears the guest at
-// one address whichever socket the guest uses, as behind a router; it keeps
-// copies of hellos and hero specs, to deliver one again late.
+// one address whichever socket the guest uses, as behind a router. It keeps a
+// copy of everything it carries, and can hold back either way, to deliver a
+// message late.
 struct Relay {
+    using Bytes = std::vector<uint8_t>;
+
     NetSocket guestSide;
     NetSocket hostSide;
     NetSocket::Address host;
     std::optional<NetSocket::Address> guest;
-    std::vector<std::vector<uint8_t>> hostHellos;
-    std::vector<std::vector<uint8_t>> guestSpecs;
+    bool holdToHost {false};
+    bool holdToGuest {false};
+    std::vector<Bytes> toHost;      // everything from the guest, carried or held
+    std::vector<Bytes> toGuest;     // everything from the host, carried or held
+    std::vector<Bytes> heldToHost;
+    std::vector<Bytes> heldToGuest;
 
     void open(uint16_t hostPort) {
         guestSide.open(0);
@@ -794,31 +801,67 @@ struct Relay {
         host = *NetSocket::resolve("127.0.0.1", hostPort);
     }
 
-    static NetSession::MessageType type(const std::vector<uint8_t> &bytes) {
+    static NetSession::MessageType type(const Bytes &bytes) {
         return static_cast<NetSession::MessageType>(bytes.size() > 6 ? bytes[6] : 0);
+    }
+
+    static Bytes first(const std::vector<Bytes> &list, NetSession::MessageType wanted) {
+        for (auto &bytes : list) {
+            if (type(bytes) == wanted) {
+                return bytes;
+            }
+        }
+        ADD_FAILURE() << "no message of type " << static_cast<int>(wanted);
+        return Bytes();
+    }
+
+    static Bytes last(const std::vector<Bytes> &list, NetSession::MessageType wanted) {
+        for (auto it = list.rbegin(); it != list.rend(); ++it) {
+            if (type(*it) == wanted) {
+                return *it;
+            }
+        }
+        ADD_FAILURE() << "no message of type " << static_cast<int>(wanted);
+        return Bytes();
     }
 
     void pump() {
         while (auto datagram = guestSide.receive()) {
             guest = datagram->from;
-            if (type(datagram->bytes) == NetSession::MessageType::HeroSpec) {
-                guestSpecs.push_back(datagram->bytes);
+            toHost.push_back(datagram->bytes);
+            if (holdToHost) {
+                heldToHost.push_back(datagram->bytes);
+            } else {
+                hostSide.send(host, datagram->bytes);
             }
-            hostSide.send(host, datagram->bytes);
         }
         while (auto datagram = hostSide.receive()) {
-            if (type(datagram->bytes) == NetSession::MessageType::Hello) {
-                hostHellos.push_back(datagram->bytes);
-            }
-            if (guest) {
+            toGuest.push_back(datagram->bytes);
+            if (holdToGuest || !guest) {
+                heldToGuest.push_back(datagram->bytes);
+            } else {
                 guestSide.send(*guest, datagram->bytes);
             }
+        }
+    }
+
+    // Delivers a message now, late.
+    void late(const Bytes &bytes, bool toTheHost) {
+        if (toTheHost) {
+            hostSide.send(host, bytes);
+        } else {
+            guestSide.send(*guest, bytes);
         }
     }
 };
 
 class NetSessionRelayTest : public NetSessionTest {
 protected:
+    void SetUp() override {
+        NetSessionTest::SetUp();
+        EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    }
+
     void relayed(int frames) {
         for (int i = 0; i < frames; ++i) {
             clock.time += 1.0 / 60.0;
@@ -829,6 +872,35 @@ protected:
         }
     }
 
+    void hostOnRelay() {
+        host.net().host(hostPort, kNpcSessionHero);
+        hostPort = host.net().localPort();
+    }
+
+    void joinByRelay(const std::string &name) {
+        guest.net().setHero(classes.hero(name));
+        guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    }
+
+    // Both sides have the hero at one ID, it leads on the guest, and the host
+    // shows it where the guest moves it.
+    void expectOneHeroPlaying(uint32_t id) {
+        ASSERT_NE(0u, id);
+        EXPECT_EQ(NetRole::Guest, guest.net().role());
+        EXPECT_EQ(id, host.net().heroId());
+        EXPECT_EQ(id, guest.net().heroId());
+        auto onHost = host.game.getObjectById<Creature>(id);
+        auto onGuest = guest.game.getObjectById<Creature>(id);
+        ASSERT_TRUE(onHost);
+        ASSERT_TRUE(onGuest);
+        EXPECT_EQ(onGuest, guest.game.party().getLeader());
+        float x = onGuest->position().x - 2.0f;
+        onGuest->setPosition(glm::vec3(x, 2.0f, 0.0f));
+        relayed(12);
+        EXPECT_NEAR(x, onHost->position().x, 1e-5f);
+    }
+
+    HeroClasses classes;
     Relay relay;
 };
 
@@ -837,75 +909,155 @@ protected:
 TEST_F(NetSessionRelayTest, should_let_a_guest_join_again_from_the_same_address_and_drop_its_earlier_hero_spec) {
     // given: a guest that played one hero, left, and joined again with
     // another, both times by the relay
-    HeroClasses classes;
-    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
-    host.net().host(0, kNpcSessionHero);
-    relay.open(host.net().localPort());
-    guest.net().setHero(classes.hero("Shan Varra"));
-    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
     relayed(60);
     uint32_t first = host.net().heroId();
     ASSERT_NE(0u, first);
-    ASSERT_FALSE(relay.guestSpecs.empty());
-    auto earlierSpec = relay.guestSpecs.front();
+    auto earlierSpec = Relay::first(relay.toHost, NetSession::MessageType::HeroSpec);
     guest.net().stop("the test leaves");
-    guest.net().setHero(classes.hero("Kel Dorn"));
-    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    joinByRelay("Kel Dorn");
     relayed(60);
     uint32_t second = host.net().heroId();
-    ASSERT_NE(0u, second);
     ASSERT_NE(first, second);
-    ASSERT_EQ(second, guest.net().heroId());
 
     // when: the first session's spec comes again, late
-    relay.hostSide.send(relay.host, earlierSpec);
+    relay.late(earlierSpec, true);
     relayed(30);
 
-    // then: the host keeps the hero the guest plays, and shows it moving
-    EXPECT_EQ(second, host.net().heroId());
-    EXPECT_EQ(second, guest.net().heroId());
-    auto onHost = host.game.getObjectById<Creature>(second);
-    auto onGuest = guest.game.getObjectById<Creature>(second);
-    ASSERT_TRUE(onHost);
-    ASSERT_TRUE(onGuest);
-    EXPECT_EQ("Kel Dorn", onHost->name());
-    onGuest->setPosition(glm::vec3(-3.0f, 2.0f, 0.0f));
-    relayed(12);
-    EXPECT_NEAR(-3.0f, onHost->position().x, 1e-5f);
+    // then: the host keeps the hero the guest plays
+    expectOneHeroPlaying(second);
+    EXPECT_EQ("Kel Dorn", host.game.getObjectById<Creature>(second)->name());
 }
 
 TEST_F(NetSessionRelayTest, should_keep_the_guests_hero_when_a_hello_from_the_hosts_earlier_session_comes_late) {
     // given: a host that started over while the guest stayed, and the hero
     // made again
-    HeroClasses classes;
-    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
-    host.net().host(0, kNpcSessionHero);
-    hostPort = host.net().localPort();
+    hostOnRelay();
     relay.open(hostPort);
-    guest.net().setHero(classes.hero("Shan Varra"));
-    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    joinByRelay("Shan Varra");
     relayed(60);
-    ASSERT_FALSE(relay.hostHellos.empty());
-    auto earlierHello = relay.hostHellos.front();
+    auto earlierHello = Relay::first(relay.toGuest, NetSession::MessageType::Hello);
     host.net().stop("the test starts over");
-    host.net().host(hostPort, kNpcSessionHero);
+    hostOnRelay();
     relayed(200);
     uint32_t hero = host.net().heroId();
     ASSERT_NE(0u, hero);
-    ASSERT_EQ(hero, guest.net().heroId());
 
     // when: a hello from the host's first session comes, late
-    ASSERT_TRUE(relay.guest);
-    relay.guestSide.send(*relay.guest, earlierHello);
+    auto current = guest.net().peerSession();
+    relay.late(earlierHello, false);
+    relayed(2);
+    EXPECT_EQ(current, guest.net().peerSession());
     relayed(300);
 
     // then: the guest still plays the same hero, in the same session
-    EXPECT_EQ(NetRole::Guest, guest.net().role());
-    EXPECT_EQ(hero, guest.net().heroId());
-    EXPECT_EQ(hero, host.net().heroId());
-    auto onGuest = guest.game.getObjectById<Creature>(hero);
-    ASSERT_TRUE(onGuest);
-    EXPECT_EQ(onGuest, guest.game.party().getLeader());
+    expectOneHeroPlaying(hero);
+    EXPECT_LE(1, guest.net().counts().stale);
+}
+
+TEST_F(NetSessionRelayTest, should_keep_the_guests_hero_when_a_hello_comes_late_from_a_host_session_it_never_heard) {
+    // given: a host that started over twice, the guest hearing nothing of
+    // the middle session, and the hero made again in the third
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
+    relayed(60);
+    host.net().stop("the test starts over");
+    relay.holdToGuest = true;
+    hostOnRelay();
+    relayed(150);
+    host.net().stop("the test starts over again");
+    relay.holdToGuest = false;
+    hostOnRelay();
+    relayed(200);
+    uint32_t hero = host.net().heroId();
+    ASSERT_NE(0u, hero);
+
+    // when: a hello from the middle session comes, late
+    auto current = guest.net().peerSession();
+    relay.late(Relay::first(relay.heldToGuest, NetSession::MessageType::Hello), false);
+    relayed(2);
+    EXPECT_EQ(current, guest.net().peerSession());
+    relayed(300);
+
+    // then: it began before the third, so the guest keeps its hero
+    expectOneHeroPlaying(hero);
+}
+
+TEST_F(NetSessionRelayTest, should_keep_the_guests_hero_when_a_hello_comes_late_from_a_guest_session_the_host_never_heard) {
+    // given: a guest that joined three times by the relay, the host hearing
+    // nothing of the second, and the third's hero made
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
+    relayed(60);
+    guest.net().stop("the test leaves");
+    relay.holdToHost = true;
+    joinByRelay("Kel Dorn");
+    relayed(60);
+    guest.net().stop("the test leaves again");
+    relay.holdToHost = false;
+    joinByRelay("Bastila");
+    relayed(60);
+    uint32_t hero = host.net().heroId();
+    ASSERT_NE(0u, hero);
+
+    // when: a hello from the second session comes, late
+    auto current = host.net().peerSession();
+    relay.late(Relay::first(relay.heldToHost, NetSession::MessageType::Hello), true);
+    relayed(2);
+    EXPECT_EQ(current, host.net().peerSession());
+    relayed(60);
+
+    // then: the host keeps the third's hero
+    expectOneHeroPlaying(hero);
+    EXPECT_EQ("Bastila", host.game.getObjectById<Creature>(hero)->name());
+}
+
+TEST_F(NetSessionRelayTest, should_drop_a_late_guest_state_from_the_guests_earlier_session) {
+    // given: a guest that played five seconds, then joined again
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
+    relayed(300);
+    auto earlierState = Relay::last(relay.toHost, NetSession::MessageType::GuestState);
+    guest.net().stop("the test leaves");
+    joinByRelay("Shan Varra");
+    relayed(60);
+    uint32_t hero = host.net().heroId();
+
+    // when: the first session's last state comes, late, counted higher than
+    // any of the second's
+    relay.late(earlierState, true);
+    relayed(2);
+
+    // then: the host goes on following the guest at once
+    expectOneHeroPlaying(hero);
+}
+
+TEST_F(NetSessionRelayTest, should_drop_a_late_snapshot_from_the_hosts_earlier_session) {
+    // given: a host that played five seconds, then started over
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
+    relayed(300);
+    auto earlierSnapshot = Relay::last(relay.toGuest, NetSession::MessageType::Snapshot);
+    host.net().stop("the test starts over");
+    hostOnRelay();
+    relayed(200);
+    ASSERT_NE(0u, guest.net().heroId());
+
+    // when: the first session's last snapshot comes, late; then the host
+    // moves an enemy
+    relay.late(earlierSnapshot, false);
+    relayed(2);
+    host.enemy->setPosition(glm::vec3(7.0f, 7.0f, 0.0f));
+    relayed(12);
+
+    // then: the guest shows it where the host has it now
+    EXPECT_NEAR(7.0f, guest.enemy->position().x, 1e-5f);
     EXPECT_LE(1, guest.net().counts().stale);
 }
 

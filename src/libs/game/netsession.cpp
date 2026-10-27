@@ -101,7 +101,8 @@ Handle handleOf(intptr_t socket) {
 }
 
 constexpr uint8_t kMagic[] {'R', 'N', 'E', 'T'};
-constexpr size_t kHeaderSize = 4 + 2 + 1 + 4;
+// "RNET", protocol, type, sequence, and the sender's session number.
+constexpr size_t kHeaderSize = 4 + 2 + 1 + 4 + 4;
 constexpr float kHelloInterval = 0.5f;
 constexpr float kManifestInterval = 2.0f;
 constexpr double kHoldAfterConversation = 1.0;
@@ -319,6 +320,19 @@ uint32_t freshNumber() {
     x ^= x >> 31;
     uint32_t number = static_cast<uint32_t>(x) ^ static_cast<uint32_t>(x >> 32);
     return number ? number : 1;
+}
+
+// When a session begins, in milliseconds of the wall clock, later than any
+// this process gave before: the other side takes a session of this side's
+// only if it began after the one it has, so that a late message from an
+// earlier one, or a stray one, changes nothing.
+uint64_t sessionStart() {
+    static uint64_t last = 0;
+    auto wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::system_clock::now().time_since_epoch())
+                                          .count());
+    last = std::max(wall, last + 1);
+    return last;
 }
 
 // "Revan, a level 1 Soldier", for the log.
@@ -732,6 +746,7 @@ void NetSession::host(uint16_t port, int guestNpc) {
     _socket.open(port);
     _role = NetRole::Host;
     _session = freshNumber();
+    _sessionStart = sessionStart();
     _lastHeard = now();
     // The host plays the PC, whichever member the save had leading.
     _game.party().setPartyLeader(kNpcPlayer);
@@ -769,6 +784,7 @@ void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
     _peer = *address;
     _role = NetRole::Guest;
     _session = freshNumber();
+    _sessionStart = sessionStart();
     _lastHeard = now();
     // The guest's controls, camera and saber mode drive its hero; a hero of
     // its own leads once the host has made it.
@@ -826,8 +842,9 @@ void NetSession::stop(const std::string &reason) {
     _holdUntil = 0.0;
     _warnedNoHero = false;
     _session = 0;
+    _sessionStart = 0;
     _peerSession.reset();
-    _retiredPeerSessions.clear();
+    _peerSessionStart = 0;
     _heroSession = 0;
     _refusedHeroSession = 0;
     _waitStarted = 0.0;
@@ -909,6 +926,7 @@ std::vector<uint8_t> NetSession::header(MessageType type) {
     putU16(out, kProtocol);
     putU8(out, static_cast<uint8_t>(type));
     putU32(out, ++_sequence);
+    putU32(out, _session);
     return out;
 }
 
@@ -919,7 +937,7 @@ void NetSession::sendHello() {
     putU64(out, manifestHash());
     auto module = _game.module();
     putU32(out, module && module->area() ? static_cast<uint32_t>(module->area()->objects().size()) : 0);
-    putU32(out, _session);
+    putU64(out, _sessionStart);
     _socket.send(_peer, out);
     ++_counts.sent;
 }
@@ -1048,20 +1066,29 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
     uint16_t protocol = in.u16();
     auto type = static_cast<MessageType>(in.u8());
     uint32_t sequence = in.u32();
-    if (protocol != kProtocol) {
+    uint32_t session = in.u32();
+    if (protocol != kProtocol || !session) {
         ++_counts.rejected;
         return;
     }
-    // A hello to the host from elsewhere: a guest, new or come back. It is
-    // taken only once it checks out, so that a stray one cuts no one off.
-    bool newGuest = _role == NetRole::Host && type == MessageType::Hello && datagram.from != _peer;
-    if (datagram.from != _peer && !newGuest) {
-        ++_counts.rejected;
-        return;
-    }
-    if (!newGuest) {
+    // Only a hello can begin a session of the other side's, and on the host
+    // it may come from elsewhere: a guest, new or come back. It is taken only
+    // once it checks out, so that a stray one cuts no one off.
+    if (type != MessageType::Hello) {
+        if (datagram.from != _peer) {
+            ++_counts.rejected;
+            return;
+        }
+        if (!_peerSession || session != *_peerSession) {
+            // From a session of the other side's that is over: late.
+            ++_counts.stale;
+            return;
+        }
         ++_counts.received;
         _lastHeard = now();
+    } else if (_role == NetRole::Guest && datagram.from != _peer) {
+        ++_counts.rejected;
+        return;
     }
 
     switch (type) {
@@ -1070,13 +1097,15 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         int npc = static_cast<int>(in.u32());
         uint64_t manifest = in.u64();
         uint32_t objects = in.u32();
-        uint32_t session = in.u32();
-        if (!in.ok() || !session) {
+        uint64_t start = in.u64();
+        if (!in.ok()) {
             ++_counts.rejected;
             return;
         }
-        if (_retiredPeerSessions.count(session)) {
-            // Late, from a session of the other side's that is over.
+        bool newSession = !_peerSession || session != *_peerSession;
+        if (newSession && _peerSession && start <= _peerSessionStart) {
+            // A session that began before the one this side has: late, or a
+            // guest that another has since replaced.
             ++_counts.stale;
             return;
         }
@@ -1090,17 +1119,17 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             }
             return;
         }
-        // The same side, started over or joined again, with a new session
-        // number: it counts its messages from 1 again.
-        bool startedOver = !newGuest && _peerSession && session != *_peerSession;
-        if (newGuest || (startedOver && _role == NetRole::Host)) {
-            _peer = datagram.from;
-            _lastReceived = 0;
-            _connected = false;
-            if (newGuest) {
-                ++_counts.received;
-                _lastHeard = now();
+        ++_counts.received;
+        _lastHeard = now();
+        // The other side started over, or a guest joined, again or anew: its
+        // messages count from 1 again.
+        bool startedOver = newSession && _peerSession;
+        if (_role == NetRole::Host && (newSession || datagram.from != _peer)) {
+            if (newSession) {
+                _connected = false;
+                _lastReceived = 0;
             }
+            _peer = datagram.from;
         }
         if (startedOver && _role == NetRole::Guest) {
             _lastReceived = 0;
@@ -1114,10 +1143,8 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
                 info(str(boost::format("net: the host %s started over") % _peer.str()));
             }
         }
-        if (_peerSession && session != *_peerSession) {
-            _retiredPeerSessions.insert(*_peerSession);
-        }
         _peerSession = session;
+        _peerSessionStart = start;
         uint64_t mine = manifestHash();
         bool match = manifest == mine;
         bool first = !_connected;
@@ -1168,7 +1195,11 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         break;
     }
     case MessageType::GuestState: {
-        if (_role != NetRole::Host || sequence < _lastReceived) {
+        if (_role != NetRole::Host) {
+            return;
+        }
+        if (sequence < _lastReceived) {
+            ++_counts.stale;
             return;
         }
         _lastReceived = sequence;
@@ -1217,7 +1248,7 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
     }
     case MessageType::HeroSpec: {
         if (_role == NetRole::Host) {
-            handleHeroSpec(bytes);
+            handleHeroSpec(bytes, session);
         }
         break;
     }
@@ -1297,7 +1328,6 @@ void NetSession::sendHeroSpec() {
     }
     auto out = header(MessageType::HeroSpec);
     std::string text(writeNetHero(*_hero));
-    putU32(out, _session);
     putU16(out, static_cast<uint16_t>(text.size()));
     out.insert(out.end(), text.begin(), text.end());
     _socket.send(_peer, out);
@@ -1310,7 +1340,6 @@ void NetSession::sendHeroReady() {
         return;
     }
     auto out = header(MessageType::HeroReady);
-    putU32(out, _session);
     putU32(out, hero->id());
     putF32(out, hero->position().x);
     putF32(out, hero->position().y);
@@ -1320,22 +1349,17 @@ void NetSession::sendHeroReady() {
     ++_counts.sent;
 }
 
-void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
+void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes, uint32_t session) {
     if (_guestNpc != kNpcSessionHero) {
         ++_counts.rejected;
         return;
     }
+    // handle() took it only from the guest's session now.
     Reader in(bytes, kHeaderSize);
-    uint32_t session = in.u32();
     uint16_t size = in.u16();
-    constexpr size_t kTextAt = kHeaderSize + 4 + 2;
-    if (!in.ok() || !session || kTextAt + size > bytes.size()) {
+    constexpr size_t kTextAt = kHeaderSize + 2;
+    if (!in.ok() || kTextAt + size > bytes.size()) {
         ++_counts.rejected;
-        return;
-    }
-    if (!_peerSession || session != *_peerSession) {
-        // From a guest session other than the one now, which hellos set: late.
-        ++_counts.stale;
         return;
     }
     if (_heroId && session == _heroSession) {
@@ -1396,8 +1420,8 @@ void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
     if (_guestNpc != kNpcSessionHero || _heroId || !_hero) {
         return;
     }
+    // handle() took it only from the host's session now.
     Reader in(bytes, kHeaderSize);
-    uint32_t session = in.u32();
     uint32_t id = in.u32();
     glm::vec3 position;
     position.x = in.f32();
@@ -1407,11 +1431,6 @@ void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
     auto module = _game.module();
     if (!in.ok() || !module || !module->area()) {
         ++_counts.rejected;
-        return;
-    }
-    if (!_peerSession || session != *_peerSession) {
-        // For a host session that is over: the hero comes from the one now.
-        ++_counts.stale;
         return;
     }
     auto hero = makeNetHero(_game, id, *_hero);
