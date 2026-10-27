@@ -306,6 +306,7 @@ private:
     uint64_t _sessionStart {0};          /**< when this side's session began, by its wall clock, later than any before */
     std::optional<uint32_t> _peerSession; /**< the other side's, from its hellos: only its messages are taken */
     uint64_t _peerSessionStart {0};      /**< when the other side's began, by its clock: an earlier one is late */
+    uint32_t _warnedEarlierSession {0};  /**< the last session refused for beginning earlier, warned of once */
     uint32_t _heroSession {0};           /**< on the host, the guest's session the hero was made for */
     uint32_t _refusedHeroSession {0};    /**< on the host, the guest's session whose hero was refused, warned of once */
     double _waitStarted {0.0};

@@ -845,6 +845,7 @@ void NetSession::stop(const std::string &reason) {
     _sessionStart = 0;
     _peerSession.reset();
     _peerSessionStart = 0;
+    _warnedEarlierSession = 0;
     _heroSession = 0;
     _refusedHeroSession = 0;
     _waitStarted = 0.0;
@@ -1104,10 +1105,21 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         }
         bool newSession = !_peerSession || session != *_peerSession;
         if (newSession && _peerSession && start <= _peerSessionStart) {
-            // A session that began before the one this side has: late, or a
-            // guest that another has since replaced.
-            ++_counts.stale;
-            return;
+            // A session that began before the one this side has, by the other
+            // side's clock: late, or a guest that another has since replaced,
+            // while that one is heard. Once it is quiet, the clock may have
+            // gone back, as across an engine restart: the session is taken.
+            if (_connected) {
+                ++_counts.stale;
+                if (_warnedEarlierSession != session) {
+                    _warnedEarlierSession = session;
+                    warn(str(boost::format("net: %s began a session before the one this side has; refused while that one is heard") %
+                             datagram.from.str()));
+                }
+                return;
+            }
+            warn(str(boost::format("net: %s began a session before the last one, by its clock; taking it, as the last is quiet") %
+                     datagram.from.str()));
         }
         if (npc != _guestNpc) {
             // Both sides would drive different heroes, and neither the other's.

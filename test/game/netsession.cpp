@@ -420,28 +420,39 @@ TEST_F(NetSessionTest, should_keep_its_guest_when_a_stray_hello_comes_from_elsew
     exchange(60);
     ASSERT_TRUE(host.net().connected());
 
-    // when: hellos from another socket, one too short and one with another member
+    // when: hellos from another socket, one too short, and a whole one of a
+    // session of its own, begun later, whose guest plays another member
     NetSocket stray;
     stray.open(0);
     auto to = NetSocket::resolve("127.0.0.1", hostPort);
     ASSERT_TRUE(to);
-    std::vector<uint8_t> shortHello {'R', 'N', 'E', 'T', static_cast<uint8_t>(NetSession::kProtocol), 0, 1, 1, 0, 0, 0};
+    auto put = [](std::vector<uint8_t> &out, uint64_t value, int bytes) {
+        for (int i = 0; i < bytes; ++i) {
+            out.push_back(static_cast<uint8_t>(value >> (8 * i)));
+        }
+    };
+    std::vector<uint8_t> shortHello {'R', 'N', 'E', 'T'};
+    put(shortHello, NetSession::kProtocol, 2);
+    put(shortHello, static_cast<uint8_t>(NetSession::MessageType::Hello), 1);
+    put(shortHello, 1, 4); // sequence
+    auto session = host.net().peerSession();
+    int rejected = host.net().counts().rejected;
     stray.send(*to, shortHello);
     std::vector<uint8_t> otherMember(shortHello);
-    otherMember.push_back(static_cast<uint8_t>(NetRole::Guest));
-    for (uint8_t byte : {5, 0, 0, 0}) {
-        otherMember.push_back(byte);
-    }
-    for (int i = 0; i < 12; ++i) {
-        otherMember.push_back(0);
-    }
+    put(otherMember, 0x5eed, 4);                  // its session
+    put(otherMember, static_cast<uint8_t>(NetRole::Guest), 1);
+    put(otherMember, 5, 4);                       // party member 5
+    put(otherMember, 0, 8);                       // objects' hash
+    put(otherMember, 0, 4);                       // objects
+    put(otherMember, 0xffffffff00000000ull, 8);   // begun after any other
     stray.send(*to, otherMember);
     guest.companion->setPosition(glm::vec3(-4.0f, 2.0f, 0.0f));
     exchange(12);
 
-    // then: the host still has its guest, and shows its hero where it went
+    // then: the host refused both, still has its guest, and shows its hero where it went
     EXPECT_TRUE(host.net().connected());
-    EXPECT_GE(host.net().counts().rejected, 2);
+    EXPECT_EQ(session, host.net().peerSession());
+    EXPECT_EQ(rejected + 2, host.net().counts().rejected);
     EXPECT_NEAR(-4.0f, host.companion->position().x, 1e-5f);
 }
 
@@ -790,6 +801,7 @@ struct Relay {
     std::optional<NetSocket::Address> guest;
     bool holdToHost {false};
     bool holdToGuest {false};
+    std::function<void(Bytes &)> rewriteToHost; // changes what it carries to the host
     std::vector<Bytes> toHost;      // everything from the guest, carried or held
     std::vector<Bytes> toGuest;     // everything from the host, carried or held
     std::vector<Bytes> heldToHost;
@@ -828,6 +840,9 @@ struct Relay {
     void pump() {
         while (auto datagram = guestSide.receive()) {
             guest = datagram->from;
+            if (rewriteToHost) {
+                rewriteToHost(datagram->bytes);
+            }
             toHost.push_back(datagram->bytes);
             if (holdToHost) {
                 heldToHost.push_back(datagram->bytes);
@@ -1014,6 +1029,41 @@ TEST_F(NetSessionRelayTest, should_keep_the_guests_hero_when_a_hello_comes_late_
     // then: the host keeps the third's hero
     expectOneHeroPlaying(hero);
     EXPECT_EQ("Bastila", host.game.getObjectById<Creature>(hero)->name());
+}
+
+TEST_F(NetSessionRelayTest, should_take_a_session_begun_earlier_by_the_clock_once_the_last_is_quiet) {
+    // given: a guest that played, left, and joined again with its clock
+    // behind, as after an engine restart: its hellos say it began at 1 ms
+    hostOnRelay();
+    relay.open(hostPort);
+    joinByRelay("Shan Varra");
+    relayed(60);
+    auto first = host.net().peerSession();
+    ASSERT_TRUE(first);
+    guest.net().stop("the test restarts");
+    relay.rewriteToHost = [](Relay::Bytes &bytes) {
+        constexpr size_t kStartAt = 15 + 1 + 4 + 8 + 4;
+        if (Relay::type(bytes) == NetSession::MessageType::Hello && bytes.size() >= kStartAt + 8) {
+            std::fill(bytes.begin() + kStartAt, bytes.begin() + kStartAt + 8, 0);
+            bytes[kStartAt] = 1;
+        }
+    };
+    joinByRelay("Kel Dorn");
+
+    // when: the first session is still heard of, within 5 s
+    relayed(60);
+
+    // then: the host keeps it
+    EXPECT_EQ(first, host.net().peerSession());
+
+    // when: it has been quiet for 5 s
+    relayed(360);
+
+    // then: the host takes the new session, and the new hero plays
+    EXPECT_NE(first, host.net().peerSession());
+    uint32_t hero = host.net().heroId();
+    expectOneHeroPlaying(hero);
+    EXPECT_EQ("Kel Dorn", host.game.getObjectById<Creature>(hero)->name());
 }
 
 TEST_F(NetSessionRelayTest, should_drop_a_late_guest_state_from_the_guests_earlier_session) {
