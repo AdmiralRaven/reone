@@ -5492,6 +5492,8 @@ void Game::makeSessionHero(const std::string &path) {
         throw std::runtime_error("Make the hero from the main menu, before loading a game");
     }
     _sessionHeroFile = path;
+    // For a PC script: a build that logs this holds the command file for it.
+    info("net: character creation opens for the session's hero, to " + path);
     startCharacterGeneration();
     if (!_charGen) {
         _sessionHeroFile.reset();

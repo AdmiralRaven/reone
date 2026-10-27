@@ -295,6 +295,17 @@ constexpr uint32_t kFirstHeroId = 0x40000000;
 // The longest name a hero keeps, in bytes, on both sides.
 constexpr size_t kMaxHeroName = 64;
 
+// A hero's name as both sides keep it: one line, cut to kMaxHeroName bytes,
+// with no spaces at either end, so that it reads back the same.
+std::string heroName(std::string name) {
+    boost::replace_all(name, "\n", " ");
+    boost::replace_all(name, "\r", " ");
+    boost::trim(name);
+    name = name.substr(0, kMaxHeroName);
+    boost::trim(name);
+    return name;
+}
+
 // A number no other session drew: not from the game's random numbers, which
 // both sides seed alike, and which the host's rolls must keep to themselves.
 uint32_t freshNumber() {
@@ -325,11 +336,8 @@ std::string heroSummary(const Character &hero) {
 
 std::string writeNetHero(const Character &character) {
     std::ostringstream out;
-    std::string name(character.name);
-    boost::replace_all(name, "\n", " ");
-    boost::replace_all(name, "\r", " ");
     // As readNetHero takes it, so that both sides show the same name.
-    name = boost::trim_copy(name).substr(0, kMaxHeroName);
+    std::string name(heroName(character.name));
     out << "reone-hero 1\n";
     out << "name=" << name << "\n";
     out << "gender=" << (character.gender == Gender::Female ? "female" : "male") << "\n";
@@ -382,7 +390,7 @@ Character readNetHero(const std::string &text, IClasses &classes) {
         std::string key(boost::trim_copy(line.substr(0, equals)));
         std::string value(boost::trim_copy(line.substr(equals + 1)));
         if (key == "name") {
-            character.name = value.substr(0, kMaxHeroName);
+            character.name = heroName(value);
         } else if (key == "gender") {
             if (value != "male" && value != "female") {
                 throw std::runtime_error("The hero's gender is male or female, not " + value);
@@ -685,7 +693,9 @@ void NetSession::setHero(const Character &hero) {
         throw std::runtime_error("Set the hero before joining: netoff first");
     }
     _hero = hero;
-    info("net: the hero to bring is " + heroSummary(hero));
+    // As the host will have it, from writeNetHero.
+    _hero->name = heroName(hero.name);
+    info("net: the hero to bring is " + heroSummary(*_hero));
 }
 
 void NetSession::followHostPause(bool pausedInFight) {
@@ -817,6 +827,7 @@ void NetSession::stop(const std::string &reason) {
     _warnedNoHero = false;
     _session = 0;
     _peerSession.reset();
+    _retiredPeerSessions.clear();
     _heroSession = 0;
     _refusedHeroSession = 0;
     _waitStarted = 0.0;
@@ -1064,6 +1075,11 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             ++_counts.rejected;
             return;
         }
+        if (_retiredPeerSessions.count(session)) {
+            // Late, from a session of the other side's that is over.
+            ++_counts.stale;
+            return;
+        }
         if (npc != _guestNpc) {
             // Both sides would drive different heroes, and neither the other's.
             ++_counts.rejected;
@@ -1097,6 +1113,9 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             } else {
                 info(str(boost::format("net: the host %s started over") % _peer.str()));
             }
+        }
+        if (_peerSession && session != *_peerSession) {
+            _retiredPeerSessions.insert(*_peerSession);
         }
         _peerSession = session;
         uint64_t mine = manifestHash();
@@ -1312,6 +1331,11 @@ void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
     constexpr size_t kTextAt = kHeaderSize + 4 + 2;
     if (!in.ok() || !session || kTextAt + size > bytes.size()) {
         ++_counts.rejected;
+        return;
+    }
+    if (!_peerSession || session != *_peerSession) {
+        // From a guest session other than the one now, which hellos set: late.
+        ++_counts.stale;
         return;
     }
     if (_heroId && session == _heroSession) {

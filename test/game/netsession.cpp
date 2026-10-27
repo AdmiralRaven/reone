@@ -774,3 +774,160 @@ TEST_F(NetSessionTest, should_stop_holding_a_command_file_after_its_time) {
     exchange(40);
     EXPECT_FALSE(host.game.holdsScriptedCommands());
 }
+
+namespace {
+
+// Stands between the guest and the host, so that the host hears the guest at
+// one address whichever socket the guest uses, as behind a router; it keeps
+// copies of hellos and hero specs, to deliver one again late.
+struct Relay {
+    NetSocket guestSide;
+    NetSocket hostSide;
+    NetSocket::Address host;
+    std::optional<NetSocket::Address> guest;
+    std::vector<std::vector<uint8_t>> hostHellos;
+    std::vector<std::vector<uint8_t>> guestSpecs;
+
+    void open(uint16_t hostPort) {
+        guestSide.open(0);
+        hostSide.open(0);
+        host = *NetSocket::resolve("127.0.0.1", hostPort);
+    }
+
+    static NetSession::MessageType type(const std::vector<uint8_t> &bytes) {
+        return static_cast<NetSession::MessageType>(bytes.size() > 6 ? bytes[6] : 0);
+    }
+
+    void pump() {
+        while (auto datagram = guestSide.receive()) {
+            guest = datagram->from;
+            if (type(datagram->bytes) == NetSession::MessageType::HeroSpec) {
+                guestSpecs.push_back(datagram->bytes);
+            }
+            hostSide.send(host, datagram->bytes);
+        }
+        while (auto datagram = hostSide.receive()) {
+            if (type(datagram->bytes) == NetSession::MessageType::Hello) {
+                hostHellos.push_back(datagram->bytes);
+            }
+            if (guest) {
+                guestSide.send(*guest, datagram->bytes);
+            }
+        }
+    }
+};
+
+class NetSessionRelayTest : public NetSessionTest {
+protected:
+    void relayed(int frames) {
+        for (int i = 0; i < frames; ++i) {
+            clock.time += 1.0 / 60.0;
+            host.net().update();
+            relay.pump();
+            guest.net().update();
+            relay.pump();
+        }
+    }
+
+    Relay relay;
+};
+
+} // namespace
+
+TEST_F(NetSessionRelayTest, should_let_a_guest_join_again_from_the_same_address_and_drop_its_earlier_hero_spec) {
+    // given: a guest that played one hero, left, and joined again with
+    // another, both times by the relay
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    relay.open(host.net().localPort());
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    relayed(60);
+    uint32_t first = host.net().heroId();
+    ASSERT_NE(0u, first);
+    ASSERT_FALSE(relay.guestSpecs.empty());
+    auto earlierSpec = relay.guestSpecs.front();
+    guest.net().stop("the test leaves");
+    guest.net().setHero(classes.hero("Kel Dorn"));
+    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    relayed(60);
+    uint32_t second = host.net().heroId();
+    ASSERT_NE(0u, second);
+    ASSERT_NE(first, second);
+    ASSERT_EQ(second, guest.net().heroId());
+
+    // when: the first session's spec comes again, late
+    relay.hostSide.send(relay.host, earlierSpec);
+    relayed(30);
+
+    // then: the host keeps the hero the guest plays, and shows it moving
+    EXPECT_EQ(second, host.net().heroId());
+    EXPECT_EQ(second, guest.net().heroId());
+    auto onHost = host.game.getObjectById<Creature>(second);
+    auto onGuest = guest.game.getObjectById<Creature>(second);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ("Kel Dorn", onHost->name());
+    onGuest->setPosition(glm::vec3(-3.0f, 2.0f, 0.0f));
+    relayed(12);
+    EXPECT_NEAR(-3.0f, onHost->position().x, 1e-5f);
+}
+
+TEST_F(NetSessionRelayTest, should_keep_the_guests_hero_when_a_hello_from_the_hosts_earlier_session_comes_late) {
+    // given: a host that started over while the guest stayed, and the hero
+    // made again
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    relay.open(hostPort);
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", relay.guestSide.localPort(), kNpcSessionHero);
+    relayed(60);
+    ASSERT_FALSE(relay.hostHellos.empty());
+    auto earlierHello = relay.hostHellos.front();
+    host.net().stop("the test starts over");
+    host.net().host(hostPort, kNpcSessionHero);
+    relayed(200);
+    uint32_t hero = host.net().heroId();
+    ASSERT_NE(0u, hero);
+    ASSERT_EQ(hero, guest.net().heroId());
+
+    // when: a hello from the host's first session comes, late
+    ASSERT_TRUE(relay.guest);
+    relay.guestSide.send(*relay.guest, earlierHello);
+    relayed(300);
+
+    // then: the guest still plays the same hero, in the same session
+    EXPECT_EQ(NetRole::Guest, guest.net().role());
+    EXPECT_EQ(hero, guest.net().heroId());
+    EXPECT_EQ(hero, host.net().heroId());
+    auto onGuest = guest.game.getObjectById<Creature>(hero);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ(onGuest, guest.game.party().getLeader());
+    EXPECT_LE(1, guest.net().counts().stale);
+}
+
+TEST_F(NetSessionTest, should_give_a_quick_heros_long_name_alike_to_both_sides) {
+    // given: a name over 64 bytes, as nethero quick takes every word
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero(" " + std::string(63, 'a') + " " + std::string(40, 'b')));
+
+    // when
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+
+    // then: one name on both sides, cut at 64 bytes, with no space left at the cut
+    ASSERT_NE(0u, host.net().heroId());
+    auto onHost = host.game.getObjectById<Creature>(host.net().heroId());
+    auto onGuest = guest.game.getObjectById<Creature>(guest.net().heroId());
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ(std::string(63, 'a'), guest.net().hero()->name);
+    EXPECT_EQ(onHost->name(), onGuest->name());
+    EXPECT_EQ(std::string(63, 'a'), onHost->name());
+}

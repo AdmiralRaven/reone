@@ -299,6 +299,7 @@ private:
     bool _warnedNoHero {false};
     uint32_t _session {0};               /**< this side's session number, fresh each nethost or netjoin */
     std::optional<uint32_t> _peerSession; /**< the other side's, from its hellos */
+    std::set<uint32_t> _retiredPeerSessions; /**< the other side's sessions before, whose late messages are dropped */
     uint32_t _heroSession {0};           /**< on the host, the guest's session the hero was made for */
     uint32_t _refusedHeroSession {0};    /**< on the host, the guest's session whose hero was refused, warned of once */
     double _waitStarted {0.0};
