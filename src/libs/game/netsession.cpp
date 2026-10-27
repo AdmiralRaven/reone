@@ -457,7 +457,13 @@ std::shared_ptr<Creature> makeNetHero(Game &game, uint32_t id, const Character &
             hero->setName(character.name);
             hero->setGender(character.gender);
             hero->setAppearance(character.appearance);
-            hero->loadAppearance();
+            try {
+                hero->loadAppearance();
+            } catch (const std::exception &e) {
+                // A hero file's look the game doesn't have: the hero comes
+                // all the same, unseen, rather than stop the session.
+                warn(str(boost::format("net: no look for the hero's appearance %d: %s") % character.appearance % e.what()));
+            }
             hero->setFaction(Faction::Friendly1);
             hero->setImmortal(true);
             hero->attributes() = character.attributes;
@@ -898,7 +904,13 @@ void NetSession::update() {
     _lastUpdate = time;
 
     while (auto datagram = _socket.receive()) {
-        handle(*datagram);
+        try {
+            handle(*datagram);
+        } catch (const std::exception &e) {
+            // Whatever a message asked, the game goes on.
+            ++_counts.rejected;
+            warn(std::string("net: a message from ") + datagram->from.str() + " couldn't be taken in: " + e.what());
+        }
     }
 
     if (_connected && time - _lastHeard > kTimeout) {
