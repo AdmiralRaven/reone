@@ -20,6 +20,8 @@
 
 #include "../fixtures/engine.h"
 
+#include "reone/game/d20/class.h"
+#include "reone/game/d20/classes.h"
 #include "reone/game/game.h"
 #include "reone/game/netsession.h"
 #include "reone/game/object/area.h"
@@ -513,4 +515,127 @@ TEST_F(NetSessionTest, should_keep_the_guests_own_pause_when_the_host_plays_on) 
 
     // then: the guest's own pause stays
     EXPECT_TRUE(guest.game.isPaused());
+}
+
+// A hero of the guest's own
+
+namespace {
+
+// A soldier class, outside the game's data, as the snapshot tests make one.
+struct HeroClasses {
+    NiceMock<resource::MockStrings> strings;
+    NiceMock<resource::MockTwoDAs> twoDas;
+    Classes classes {strings, twoDas};
+    std::shared_ptr<CreatureClass> soldier {std::make_shared<CreatureClass>(ClassType::Soldier, classes, strings, twoDas)};
+
+    Character hero(const std::string &name) {
+        Character character;
+        character.name = name;
+        character.gender = Gender::Female;
+        character.appearance = 91;
+        character.attributes.addClassLevels(soldier.get(), 2);
+        int scores[] {16, 14, 14, 10, 12, 8};
+        for (int i = 0; i < 6; ++i) {
+            character.attributes.setAbilityScore(static_cast<Ability>(i), scores[i]);
+        }
+        character.attributes.setSkillRank(SkillType::Awareness, 2);
+        character.attributes.setSkillRank(SkillType::Security, 4);
+        character.attributes.addFeat(FeatType::JediDefense);
+        character.attributes.addFeat(FeatType::PowerAttack);
+        return character;
+    }
+};
+
+} // namespace
+
+TEST(NetHero, should_travel_as_text_and_come_back_the_same) {
+    HeroClasses classes;
+    NiceMock<MockClasses> lookup;
+    ON_CALL(lookup, get(ClassType::Soldier)).WillByDefault(Return(classes.soldier));
+    auto hero = classes.hero("Shan Varra");
+
+    auto text = writeNetHero(hero);
+    auto back = readNetHero(text, lookup);
+
+    EXPECT_EQ(0u, text.rfind("reone-hero 1\n", 0));
+    EXPECT_EQ("Shan Varra", back.name);
+    EXPECT_EQ(Gender::Female, back.gender);
+    EXPECT_EQ(91, back.appearance);
+    EXPECT_EQ(2, back.attributes.getClassLevel(ClassType::Soldier));
+    EXPECT_EQ(16, back.attributes.strength());
+    EXPECT_EQ(8, back.attributes.charisma());
+    EXPECT_EQ(4, back.attributes.getSkillRank(SkillType::Security));
+    EXPECT_TRUE(back.attributes.hasFeat(FeatType::JediDefense));
+    EXPECT_TRUE(back.attributes.hasFeat(FeatType::PowerAttack));
+    EXPECT_EQ(writeNetHero(hero), writeNetHero(back));
+}
+
+TEST_F(NetSessionTest, should_make_a_hero_only_from_the_main_menu) {
+    // a game is loaded: character creation would drop it
+    EXPECT_THROW(host.game.makeSessionHero("hero.txt"), std::runtime_error);
+    EXPECT_FALSE(host.game.sessionHeroFile());
+}
+
+TEST(NetHero, should_refuse_what_isnt_a_hero) {
+    NiceMock<MockClasses> lookup;
+    EXPECT_THROW(readNetHero("name=Bastila\n", lookup), std::runtime_error);
+    EXPECT_THROW(readNetHero("reone-hero 1\nname=Bastila\n", lookup), std::runtime_error);
+    EXPECT_THROW(readNetHero("reone-hero 1\nname=Bastila\nclass=0:1\n", lookup), std::runtime_error); // no such class here
+    EXPECT_THROW(readNetHero("reone-hero 1\nname=Bastila\ngender=droid\n", lookup), std::runtime_error);
+}
+
+TEST_F(NetSessionTest, should_bring_the_guests_own_hero_into_both_games_and_take_it_away_after) {
+    // given: a hero of the guest's own, and a host expecting one
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    EXPECT_THROW(guest.net().join("127.0.0.1", hostPort, kNpcSessionHero), std::runtime_error);
+    guest.net().setHero(classes.hero("Shan Varra"));
+
+    // when
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+
+    // then: both games have the hero, at one ID, out of saves and of the object check
+    uint32_t id = host.net().heroId();
+    ASSERT_NE(0u, id);
+    EXPECT_EQ(id, guest.net().heroId());
+    auto onHost = host.game.getObjectById<Creature>(id);
+    auto onGuest = guest.game.getObjectById<Creature>(id);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ("Shan Varra", onHost->name());
+    EXPECT_EQ(2, onGuest->attributes().getClassLevel(ClassType::Soldier));
+    EXPECT_TRUE(host.game.isSessionOnly(id));
+    EXPECT_TRUE(guest.game.isSessionOnly(id));
+    EXPECT_EQ(std::optional<bool>(true), host.net().manifestsMatch());
+    EXPECT_EQ(std::optional<bool>(true), guest.net().manifestsMatch());
+    // beside the host's PC, a metre off
+    EXPECT_NEAR(1.0f, glm::distance(onHost->position(), host.pc->position()), 1e-4f);
+    // the guest plays it; on the host it is no party member
+    EXPECT_EQ(onGuest, guest.game.party().getLeader());
+    EXPECT_FALSE(host.game.party().isMember(*onHost));
+    EXPECT_EQ(host.pc, host.game.party().getLeader());
+
+    // when: the guest moves its hero
+    onGuest->setPosition(glm::vec3(-3.0f, 2.0f, 0.0f));
+    exchange(12);
+
+    // then: the host shows it there, and the guest's stays its own
+    EXPECT_NEAR(-3.0f, onHost->position().x, 1e-5f);
+    EXPECT_NEAR(-3.0f, onGuest->position().x, 1e-5f);
+
+    // when: the session ends
+    guest.net().stop("the test is over");
+    host.net().stop("the test is over");
+
+    // then: the hero goes with it, and the guest's PC leads again
+    EXPECT_EQ(0u, guest.net().heroId());
+    EXPECT_FALSE(host.game.isSessionOnly(id));
+    EXPECT_EQ(guest.pc, guest.game.party().getLeader());
+    EXPECT_FALSE(guest.game.party().isMember(*onGuest));
+    // the guest's hero stays set, for the next session
+    ASSERT_TRUE(guest.net().hero());
+    EXPECT_EQ("Shan Varra", guest.net().hero()->name);
 }

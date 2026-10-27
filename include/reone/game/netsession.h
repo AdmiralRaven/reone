@@ -19,6 +19,7 @@
 
 #include <set>
 
+#include "reone/game/character.h"
 #include "reone/game/jacontact.h"
 
 namespace reone {
@@ -27,8 +28,45 @@ namespace game {
 
 class Creature;
 class Game;
+class IClasses;
 class IConsole;
 struct ServicesView;
+
+/**
+ * A second hero as a session's guest makes one and sends it (#39): KOTOR's
+ * character creation's choices, as text, one "key=value" a line:
+ *
+ *     reone-hero 1
+ *     name=Revan
+ *     gender=female
+ *     appearance=136
+ *     class=3:1
+ *     abilities=14,14,14,12,12,10
+ *     skills=3:2,6:4
+ *     feats=55,42
+ *     powers=
+ *
+ * Classes, skills, feats and powers by KOTOR's numbers (classes.2da,
+ * skills.2da, feat.2da, spells.2da); a class with its levels; the abilities
+ * in KOTOR's order, strength to charisma.
+ */
+std::string writeNetHero(const Character &character);
+
+/** \throws std::runtime_error when \p text isn't a hero, or names a class KOTOR doesn't have */
+Character readNetHero(const std::string &text, IClasses &classes);
+
+/**
+ * A hero as character creation's quick path makes one: \p clazz's defaults
+ * from classes.2da and the first PC portrait's look for \p gender and the
+ * class, as ClassSelection picks among them.
+ */
+Character quickNetHero(ServicesView &services, ClassType clazz, Gender gender, std::string name);
+
+/**
+ * Makes \p character a creature at \p id, as CharacterGeneration::finish makes
+ * the PC, but for its scripts; none if the ID is taken.
+ */
+std::shared_ptr<Creature> makeNetHero(Game &game, uint32_t id, const Character &character);
 
 /** A UDP socket that never blocks: Winsock on Windows, BSD sockets elsewhere. */
 class NetSocket : boost::noncopyable {
@@ -132,7 +170,9 @@ public:
         Hello = 1,
         Snapshot = 2,
         GuestState = 3,
-        GuestHit = 4
+        GuestHit = 4,
+        HeroSpec = 5, /**< the guest's own hero, as writeNetHero has it */
+        HeroReady = 6 /**< the host made it: its ID and where it stands */
     };
 
     NetSession(Game &game, ServicesView &services);
@@ -143,8 +183,21 @@ public:
     /** The UDP port this side listens on; 0 with no session. */
     uint16_t localPort() const { return _socket.localPort(); }
 
-    /** The guest's hero, by its party NPC number; never the PC, kNpcPlayer, which is the host's. */
+    /**
+     * The guest's hero, by its party NPC number; never the PC, kNpcPlayer,
+     * which is the host's. kNpcSessionHero for a hero of the guest's own,
+     * set with setHero before joining.
+     */
     int guestNpc() const { return _guestNpc; }
+
+    /** On the guest, before joining with kNpcSessionHero: the hero it brings. */
+    void setHero(const Character &hero);
+    const std::optional<Character> &hero() const { return _hero; }
+
+    ServicesView &services() { return _services; }
+
+    /** The second hero's ID on both sides, once the host made it; 0 before, or with a party member instead. */
+    uint32_t heroId() const { return _heroId; }
 
     /**
      * Starts hosting on \p port, for a guest who plays party member \p guestNpc.
@@ -229,6 +282,9 @@ private:
     double _holdUntil {0.0};
     bool _warnedNoHero {false};
     bool _hostPausedInFight {false};
+    std::optional<Character> _hero; /**< the guest's own hero, to send; the host's copy once received */
+    uint32_t _heroId {0};
+    float _sinceHeroSpec {0.0f};
     bool _pausedByHost {false}; /**< whether the guest was playing when the host's pause stopped it */
     std::set<uint32_t> _unknownIds;
     std::optional<bool> _manifestsMatch;
@@ -240,6 +296,11 @@ private:
     std::shared_ptr<Creature> guestHero() const;
     bool partyInCombat() const;
     void followHostPause(bool pausedInFight);
+    void sendHeroSpec();
+    void sendHeroReady();
+    void handleHeroSpec(const std::vector<uint8_t> &bytes);
+    void handleHeroReady(const std::vector<uint8_t> &bytes);
+    void removeHero();
     std::vector<uint8_t> header(MessageType type);
     void sendHello();
     void sendSnapshot();

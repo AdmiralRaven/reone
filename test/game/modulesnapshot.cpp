@@ -399,6 +399,29 @@ TEST_F(SnapshotFixture, k1_active_member_exclusion_is_unchanged) {
     EXPECT_EQ(worldCreature->id(), creatures.front()->getUint("ObjectId"));
 }
 
+TEST_F(SnapshotFixture, leaves_a_two_player_sessions_second_hero_out) {
+    // given: a second hero, session-only, and another creature beside it
+    auto hero = game.newCreature();
+    hero->setTag("coop_hero");
+    TestGameModule::addSnapshotObject(*area, hero);
+    game.setSessionOnly(hero->id(), true);
+    auto other = game.newCreature();
+    other->setTag("end_trask");
+    TestGameModule::addSnapshotObject(*area, other);
+
+    // when
+    auto saved = ModuleSnapshotBuilder(game, "module_k1_party").build();
+
+    // then: the save has the other, not the hero
+    ASSERT_TRUE(saved) << saved.message;
+    std::vector<uint32_t> ids;
+    for (auto &creature : saved.snapshot->git->getList("Creature List")) {
+        ids.push_back(creature->getUint("ObjectId"));
+    }
+    EXPECT_EQ(ids.end(), std::find(ids.begin(), ids.end(), hero->id()));
+    EXPECT_NE(ids.end(), std::find(ids.begin(), ids.end(), other->id()));
+}
+
 TEST_F(SnapshotFixture, writes_and_reopens_complete_deterministic_module_state) {
     game.setCustomToken(9, "nine");
     game.setCustomToken(2, "two");

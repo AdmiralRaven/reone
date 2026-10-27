@@ -5480,6 +5480,14 @@ void Game::notifyLevelUpPending(const Creature &creature) {
     _services.audio.mixer.play(_services.game.guiSounds.getOnLevelUpNotify(), AudioType::Sound);
 }
 
+void Game::makeSessionHero(const std::string &path) {
+    if (_module) {
+        throw std::runtime_error("Make the hero from the main menu, before loading a game");
+    }
+    _sessionHeroFile = path;
+    startCharacterGeneration();
+}
+
 void Game::startCharacterGeneration() {
     resetGame();
     if (!_charGen) {

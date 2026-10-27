@@ -1593,6 +1593,8 @@ std::shared_ptr<Gff> ModuleSnapshotBuilder::buildGit(
         if (object->type() == ObjectType::Creature &&
             _game._party.isRetainedRuntimeRepresentation(
                 *static_cast<const Creature *>(object.get()))) continue;
+        // A two-player session's second hero isn't KOTOR's to keep.
+        if (_game.isSessionOnly(object->id())) continue;
         switch (object->type()) {
         case ObjectType::Creature:
             lists["Creature List"].push_back(writeCreature(

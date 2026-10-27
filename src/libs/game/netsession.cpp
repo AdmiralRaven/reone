@@ -43,6 +43,10 @@
 
 #include "reone/game/attack.h"
 #include "reone/game/console.h"
+#include "reone/game/d20/class.h"
+#include "reone/game/d20/classes.h"
+#include "reone/game/di/services.h"
+#include "reone/game/portraits.h"
 #include "reone/game/effect/damage.h"
 #include "reone/game/game.h"
 #include "reone/game/object/area.h"
@@ -51,8 +55,11 @@
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
 #include "reone/system/logutil.h"
+#include "reone/system/randomutil.h"
 
 #include <chrono>
+#include <fstream>
+#include <sstream>
 
 namespace reone {
 
@@ -250,7 +257,218 @@ const char *roleName(NetRole role) {
     }
 }
 
+std::vector<std::string> splitList(const std::string &value) {
+    std::vector<std::string> items;
+    std::string item;
+    std::istringstream in(value);
+    while (std::getline(in, item, ',')) {
+        boost::trim(item);
+        if (!item.empty()) {
+            items.push_back(item);
+        }
+    }
+    return items;
+}
+
+int toInt(const std::string &value, const std::string &key) {
+    try {
+        size_t used = 0;
+        int result = std::stoi(value, &used);
+        if (used != value.size()) {
+            throw std::invalid_argument(value);
+        }
+        return result;
+    } catch (const std::exception &) {
+        throw std::runtime_error("The hero's " + key + " isn't a number: " + value);
+    }
+}
+
+std::pair<int, int> toPair(const std::string &value, const std::string &key) {
+    auto colon = value.find(':');
+    if (colon == std::string::npos) {
+        throw std::runtime_error("The hero's " + key + " needs a number:number: " + value);
+    }
+    return {toInt(value.substr(0, colon), key), toInt(value.substr(colon + 1), key)};
+}
+
+constexpr uint32_t kFirstHeroId = 0x40000000;
+
+// "Revan, a level 1 Soldier", for the log.
+std::string heroSummary(const Character &hero) {
+    std::string classes;
+    for (auto &[clazz, levels] : hero.attributes.classLevels()) {
+        classes += (classes.empty() ? "" : " and ") + str(boost::format("level %d %s") % levels % clazz->name());
+    }
+    return hero.name + ", " + (classes.empty() ? std::string("no class") : classes);
+}
+
 } // namespace
+
+// The second hero
+
+std::string writeNetHero(const Character &character) {
+    std::ostringstream out;
+    std::string name(character.name);
+    boost::replace_all(name, "\n", " ");
+    boost::replace_all(name, "\r", " ");
+    out << "reone-hero 1\n";
+    out << "name=" << name << "\n";
+    out << "gender=" << (character.gender == Gender::Female ? "female" : "male") << "\n";
+    out << "appearance=" << character.appearance << "\n";
+    for (auto &[clazz, levels] : character.attributes.classLevels()) {
+        out << "class=" << static_cast<int>(clazz->type()) << ":" << levels << "\n";
+    }
+    const auto &a = character.attributes;
+    out << "abilities=" << a.strength() << "," << a.dexterity() << "," << a.constitution() << "," << a.intelligence()
+        << "," << a.wisdom() << "," << a.charisma() << "\n";
+    out << "skills=";
+    bool first = true;
+    for (auto &[skill, rank] : a.skillRanks()) {
+        out << (first ? "" : ",") << static_cast<int>(skill) << ":" << rank;
+        first = false;
+    }
+    out << "\nfeats=";
+    first = true;
+    for (auto feat : a.feats()) {
+        out << (first ? "" : ",") << static_cast<int>(feat);
+        first = false;
+    }
+    out << "\npowers=";
+    first = true;
+    for (auto power : a.spells()) {
+        out << (first ? "" : ",") << static_cast<int>(power);
+        first = false;
+    }
+    out << "\n";
+    return out.str();
+}
+
+Character readNetHero(const std::string &text, IClasses &classes) {
+    std::istringstream in(text);
+    std::string line;
+    if (!std::getline(in, line) || boost::trim_copy(line) != "reone-hero 1") {
+        throw std::runtime_error("Not a reone hero: it must start with \"reone-hero 1\"");
+    }
+    Character character;
+    bool hasClass = false;
+    while (std::getline(in, line)) {
+        boost::trim(line);
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        auto equals = line.find('=');
+        if (equals == std::string::npos) {
+            throw std::runtime_error("Not a hero's line, with no '=': " + line);
+        }
+        std::string key(boost::trim_copy(line.substr(0, equals)));
+        std::string value(boost::trim_copy(line.substr(equals + 1)));
+        if (key == "name") {
+            character.name = value.substr(0, 64);
+        } else if (key == "gender") {
+            if (value != "male" && value != "female") {
+                throw std::runtime_error("The hero's gender is male or female, not " + value);
+            }
+            character.gender = value == "female" ? Gender::Female : Gender::Male;
+        } else if (key == "appearance") {
+            character.appearance = toInt(value, key);
+        } else if (key == "class") {
+            auto [type, levels] = toPair(value, key);
+            auto clazz = classes.get(static_cast<ClassType>(type));
+            if (!clazz || levels < 1 || levels > 50) {
+                throw std::runtime_error("No class " + std::to_string(type) + " with " + std::to_string(levels) + " levels for the hero");
+            }
+            character.attributes.addClassLevels(clazz.get(), levels);
+            hasClass = true;
+        } else if (key == "abilities") {
+            auto items = splitList(value);
+            if (items.size() != 6) {
+                throw std::runtime_error("The hero needs six abilities, strength to charisma: " + value);
+            }
+            for (int i = 0; i < 6; ++i) {
+                character.attributes.setAbilityScore(static_cast<Ability>(i), toInt(items[i], key));
+            }
+        } else if (key == "skills") {
+            for (auto &item : splitList(value)) {
+                auto [skill, rank] = toPair(item, key);
+                character.attributes.setSkillRank(static_cast<SkillType>(skill), rank);
+            }
+        } else if (key == "feats") {
+            for (auto &item : splitList(value)) {
+                character.attributes.addFeat(static_cast<FeatType>(toInt(item, key)));
+            }
+        } else if (key == "powers") {
+            for (auto &item : splitList(value)) {
+                character.attributes.addSpell(static_cast<SpellType>(toInt(item, key)));
+            }
+        }
+        // Other keys are a later version's: left alone.
+    }
+    if (character.name.empty() || !hasClass) {
+        throw std::runtime_error("The hero needs a name and a class");
+    }
+    return character;
+}
+
+Character quickNetHero(ServicesView &services, ClassType clazz, Gender gender, std::string name) {
+    auto creatureClass = services.game.classes.get(clazz);
+    if (!creatureClass) {
+        throw std::runtime_error("No class " + std::to_string(static_cast<int>(clazz)) + " in this game");
+    }
+    Character character;
+    character.name = std::move(name);
+    character.gender = gender;
+    character.attributes = creatureClass->defaultAttributes();
+    int sex = gender == Gender::Female ? 1 : 0;
+    for (auto &portrait : services.game.portraits.portraits()) {
+        if (!portrait.forPC || portrait.sex != sex) {
+            continue;
+        }
+        // As ClassSelection::getRandomCharacterAppearance picks the body.
+        switch (clazz) {
+        case ClassType::Scoundrel:
+        case ClassType::JediConsular:
+            character.appearance = portrait.appearanceS;
+            break;
+        case ClassType::Soldier:
+        case ClassType::JediGuardian:
+            character.appearance = portrait.appearanceL;
+            break;
+        default:
+            character.appearance = portrait.appearanceNumber;
+            break;
+        }
+        break;
+    }
+    return character;
+}
+
+std::shared_ptr<Creature> makeNetHero(Game &game, uint32_t id, const Character &character) {
+    std::vector<std::shared_ptr<Object>> noObsolete;
+    std::shared_ptr<Creature> hero;
+    game.replaceRuntimeObjectGraph(
+        noObsolete,
+        [&]() {
+            hero = game.newCreatureAtId(id);
+            if (!hero) {
+                return;
+            }
+            // As CharacterGeneration::finish makes the PC.
+            hero->setTag("coop_hero");
+            hero->setName(character.name);
+            hero->setGender(character.gender);
+            hero->setAppearance(character.appearance);
+            hero->loadAppearance();
+            hero->setFaction(Faction::Friendly1);
+            hero->setImmortal(true);
+            hero->attributes() = character.attributes;
+            hero->initializeGeneratedVitality();
+        },
+        []() noexcept {});
+    if (hero) {
+        game.setSessionOnly(hero->id(), true);
+    }
+    return hero;
+}
 
 // NetSocket
 
@@ -415,6 +633,9 @@ double NetSession::now() const {
 }
 
 std::shared_ptr<Creature> NetSession::guestHero() const {
+    if (_guestNpc == kNpcSessionHero) {
+        return _heroId ? _game.getObjectById<Creature>(_heroId) : nullptr;
+    }
     for (auto &member : _game.party().members()) {
         if (member.npc == _guestNpc) {
             return member.creature;
@@ -429,7 +650,17 @@ bool NetSession::partyInCombat() const {
             return true;
         }
     }
-    return false;
+    // The second hero, on the host no party member, counts as one.
+    auto hero = guestHero();
+    return hero && hero->isInCombat();
+}
+
+void NetSession::setHero(const Character &hero) {
+    if (_role != NetRole::None) {
+        throw std::runtime_error("Set the hero before joining: netoff first");
+    }
+    _hero = hero;
+    info("net: the hero to bring is " + heroSummary(hero));
 }
 
 void NetSession::followHostPause(bool pausedInFight) {
@@ -460,7 +691,7 @@ void NetSession::host(uint16_t port, int guestNpc) {
         throw std::runtime_error("The guest plays a party member; the PC is the host's");
     }
     _guestNpc = guestNpc;
-    if (!guestHero()) {
+    if (guestNpc != kNpcSessionHero && !guestHero()) {
         throw std::runtime_error("No party member " + std::to_string(guestNpc) + " for the guest to play");
     }
     _socket.open(port);
@@ -469,8 +700,13 @@ void NetSession::host(uint16_t port, int guestNpc) {
     // The host plays the PC, whichever member the save had leading.
     _game.party().setPartyLeader(kNpcPlayer);
     _game.party().setLeaderLocked(true);
-    info(str(boost::format("net: hosting on UDP port %d for a guest playing party member %d (%s); objects %016x") %
-             _socket.localPort() % guestNpc % guestHero()->tag() % manifestHash()));
+    if (guestNpc == kNpcSessionHero) {
+        info(str(boost::format("net: hosting on UDP port %d for a guest bringing a hero of its own; objects %016x") %
+                 _socket.localPort() % manifestHash()));
+    } else {
+        info(str(boost::format("net: hosting on UDP port %d for a guest playing party member %d (%s); objects %016x") %
+                 _socket.localPort() % guestNpc % guestHero()->tag() % manifestHash()));
+    }
 }
 
 void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
@@ -486,20 +722,32 @@ void NetSession::join(const std::string &host, uint16_t port, int guestNpc) {
         throw std::runtime_error("The guest plays a party member; the PC is the host's");
     }
     _guestNpc = guestNpc;
+    if (guestNpc == kNpcSessionHero && !_hero) {
+        throw std::runtime_error("No hero of this side's own to bring: nethero first");
+    }
     auto hero = guestHero();
-    if (!hero) {
+    if (guestNpc != kNpcSessionHero && !hero) {
         throw std::runtime_error("No party member " + std::to_string(guestNpc) + " to play");
     }
     _socket.open(0);
     _peer = *address;
     _role = NetRole::Guest;
     _lastHeard = now();
-    // The guest's controls, camera and saber mode drive its hero.
-    _game.party().setPartyLeader(guestNpc);
+    // The guest's controls, camera and saber mode drive its hero; a hero of
+    // its own leads once the host has made it.
+    if (hero) {
+        _game.party().setPartyLeader(guestNpc);
+    }
     _game.party().setLeaderLocked(true);
     _game.setFollowingHost(true);
-    info(str(boost::format("net: joining %s as party member %d (%s); objects %016x") %
-             _peer.str() % guestNpc % hero->tag() % manifestHash()));
+    _sinceHeroSpec = kHelloInterval;
+    if (hero) {
+        info(str(boost::format("net: joining %s as party member %d (%s); objects %016x") %
+                 _peer.str() % guestNpc % hero->tag() % manifestHash()));
+    } else {
+        info(str(boost::format("net: joining %s with a hero of this side's own, %s; objects %016x") %
+                 _peer.str() % _hero->name % manifestHash()));
+    }
     sendHello();
 }
 
@@ -508,6 +756,11 @@ void NetSession::stop(const std::string &reason) {
         return;
     }
     _game.party().setLeaderLocked(false);
+    // The second hero lives only as long as the session.
+    removeHero();
+    if (_role == NetRole::Host) {
+        _hero.reset();
+    }
     if (_role == NetRole::Guest) {
         if (_hostPausedInFight && _pausedByHost) {
             _game.setPaused(false);
@@ -546,6 +799,10 @@ uint64_t NetSession::manifestHash() const {
     }
     std::vector<std::tuple<uint32_t, int, std::string>> objects;
     for (auto &object : module->area()->objects()) {
+        // The second hero, which the guest makes once the host has, apart.
+        if (_game.isSessionOnly(object->id())) {
+            continue;
+        }
         objects.emplace_back(object->id(), static_cast<int>(object->type()), boost::to_lower_copy(object->tag()));
     }
     std::sort(objects.begin(), objects.end());
@@ -662,6 +919,14 @@ void NetSession::update() {
         // Now and then, for both sides to compare their objects again.
         _sinceHello = 0.0f;
         sendHello();
+    }
+    if (_role == NetRole::Guest && _guestNpc == kNpcSessionHero && !_heroId) {
+        // The hero of this side's own, until the host says it has made it.
+        _sinceHeroSpec += elapsed;
+        if (_sinceHeroSpec >= kHelloInterval) {
+            _sinceHeroSpec = 0.0f;
+            sendHeroSpec();
+        }
     }
     if (!_connected || _sinceSend < kSendInterval) {
         return;
@@ -824,6 +1089,18 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         apply(placed, true);
         break;
     }
+    case MessageType::HeroSpec: {
+        if (_role == NetRole::Host) {
+            handleHeroSpec(bytes);
+        }
+        break;
+    }
+    case MessageType::HeroReady: {
+        if (_role == NetRole::Guest) {
+            handleHeroReady(bytes);
+        }
+        break;
+    }
     case MessageType::GuestHit: {
         if (_role != NetRole::Host) {
             return;
@@ -888,6 +1165,138 @@ void NetSession::apply(const NetCreatureState &state, bool position) {
     ++_counts.applied;
 }
 
+void NetSession::sendHeroSpec() {
+    if (!_hero) {
+        return;
+    }
+    auto out = header(MessageType::HeroSpec);
+    std::string text(writeNetHero(*_hero));
+    putU16(out, static_cast<uint16_t>(text.size()));
+    out.insert(out.end(), text.begin(), text.end());
+    _socket.send(_peer, out);
+    ++_counts.sent;
+}
+
+void NetSession::sendHeroReady() {
+    auto hero = guestHero();
+    if (!hero) {
+        return;
+    }
+    auto out = header(MessageType::HeroReady);
+    putU32(out, hero->id());
+    putF32(out, hero->position().x);
+    putF32(out, hero->position().y);
+    putF32(out, hero->position().z);
+    putF32(out, hero->getFacing());
+    _socket.send(_peer, out);
+    ++_counts.sent;
+}
+
+void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes) {
+    if (_guestNpc != kNpcSessionHero) {
+        ++_counts.rejected;
+        return;
+    }
+    if (_heroId) {
+        // Made already: the guest hasn't heard.
+        sendHeroReady();
+        return;
+    }
+    Reader in(bytes, kHeaderSize);
+    uint16_t size = in.u16();
+    if (!in.ok() || kHeaderSize + 2 + size > bytes.size()) {
+        ++_counts.rejected;
+        return;
+    }
+    std::string text(bytes.begin() + kHeaderSize + 2, bytes.begin() + kHeaderSize + 2 + size);
+    Character character;
+    try {
+        character = readNetHero(text, _services.game.classes);
+    } catch (const std::exception &e) {
+        ++_counts.rejected;
+        warn(std::string("net: the guest's hero won't do: ") + e.what());
+        return;
+    }
+    auto pc = _game.party().player();
+    auto module = _game.module();
+    if (!pc || !module || !module->area()) {
+        return;
+    }
+    // A fresh ID, far from the runtime's and from presentation objects', that
+    // neither side has used this session.
+    std::shared_ptr<Creature> hero;
+    for (int attempt = 0; attempt < 16 && !hero; ++attempt) {
+        hero = makeNetHero(_game, kFirstHeroId + static_cast<uint32_t>(randomInt(0, 0xffffff)), character);
+    }
+    if (!hero) {
+        warn("net: no ID free for the guest's hero");
+        return;
+    }
+    // Beside the PC, a metre to its right, facing as it does.
+    float facing = pc->getFacing();
+    hero->setPosition(pc->position() + glm::vec3(std::cos(facing), std::sin(facing), 0.0f));
+    hero->setFacing(facing);
+    module->area()->add(hero);
+    module->area()->determineObjectRoom(*hero);
+    _hero = character;
+    _heroId = hero->id();
+    info(str(boost::format("net: the guest's hero joins: %s, at %.2f %.2f") % heroSummary(character) %
+             hero->position().x % hero->position().y));
+    sendHeroReady();
+}
+
+void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
+    if (_guestNpc != kNpcSessionHero || _heroId || !_hero) {
+        return;
+    }
+    Reader in(bytes, kHeaderSize);
+    uint32_t id = in.u32();
+    glm::vec3 position;
+    position.x = in.f32();
+    position.y = in.f32();
+    position.z = in.f32();
+    float facing = in.f32();
+    auto module = _game.module();
+    if (!in.ok() || !module || !module->area()) {
+        ++_counts.rejected;
+        return;
+    }
+    auto hero = makeNetHero(_game, id, *_hero);
+    if (!hero) {
+        warn(str(boost::format("net: the host made the hero at ID %d, which this side has used; netoff, and join again") % id));
+        stop("the hero's ID is taken here");
+        return;
+    }
+    hero->setPosition(position);
+    hero->setFacing(facing);
+    module->area()->add(hero);
+    module->area()->determineObjectRoom(*hero);
+    _heroId = id;
+    // This side plays it: the party's leader, for the controls, camera and saber mode.
+    auto &party = _game.party();
+    party.setLeaderLocked(false);
+    party.addSessionHero(hero);
+    party.setLeaderLocked(true);
+    info("net: playing this side's own hero, " + heroSummary(*_hero));
+}
+
+void NetSession::removeHero() {
+    if (!_heroId) {
+        return;
+    }
+    auto hero = _game.getObjectById<Creature>(_heroId);
+    if (_role == NetRole::Guest) {
+        _game.party().removeSessionHero();
+    }
+    if (hero) {
+        if (auto module = _game.module(); module && module->area()) {
+            module->area()->destroyObject(*hero);
+        }
+    }
+    _game.setSessionOnly(_heroId, false);
+    _heroId = 0;
+}
+
 void NetSession::applyHit(uint32_t targetId, JaBodyRegion region) {
     auto hero = guestHero();
     auto target = _game.getObjectById<Creature>(targetId);
@@ -921,6 +1330,33 @@ static int defaultGuestNpc(Game &game) {
     throw std::runtime_error("The party has no one but the PC for the guest to play");
 }
 
+// The guest's hero as the console names it: a party member's number, "hero"
+// for one of the guest's own, or by default the first after the PC.
+static int guestNpcArg(Game &game, const ConsoleArgs &args, size_t index) {
+    if (args.size() <= index) {
+        return defaultGuestNpc(game);
+    }
+    if (boost::iequals(std::string(*args[index]), "hero")) {
+        return kNpcSessionHero;
+    }
+    return args.get<int>(index).value_or(-99);
+}
+
+static ClassType heroClassArg(const std::string &name) {
+    static const std::map<std::string, ClassType> kClasses {
+        {"soldier", ClassType::Soldier},
+        {"scout", ClassType::Scout},
+        {"scoundrel", ClassType::Scoundrel},
+        {"guardian", ClassType::JediGuardian},
+        {"consular", ClassType::JediConsular},
+        {"sentinel", ClassType::JediSentinel}};
+    auto it = kClasses.find(boost::to_lower_copy(name));
+    if (it == kClasses.end()) {
+        throw std::runtime_error("Usage: nethero quick <soldier|scout|scoundrel|guardian|consular|sentinel> <male|female> <name>");
+    }
+    return it->second;
+}
+
 void registerNetConsoleCommands(Game &game, IConsole &console) {
     auto print = [&console](const std::string &line) {
         console.printLine(line);
@@ -936,7 +1372,7 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
             }
         };
     };
-    console.registerCommand("nethost", "host a two-player session: nethost [port, 7777] [guest's party member, the first after the PC]",
+    console.registerCommand("nethost", "host a two-player session: nethost [port, 7777] [guest's party member, the first after the PC, or hero for one of its own]",
                             logged("nethost", [&game, print](const ConsoleArgs &args) {
                                 if (args.size() > 3) {
                                     throw std::runtime_error("Usage: nethost [port] [npc]");
@@ -945,11 +1381,11 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
                                 if (port < 0 || port > 65535) {
                                     throw std::runtime_error("Usage: nethost [port] [npc]");
                                 }
-                                int npc = args.size() > 2 ? args.get<int>(2).value_or(-99) : defaultGuestNpc(game);
+                                int npc = guestNpcArg(game, args, 2);
                                 game.netSession().host(static_cast<uint16_t>(port), npc);
                                 print(game.netSession().status());
                             }));
-    console.registerCommand("netjoin", "join a two-player session: netjoin <host> [port, 7777] [party member to play, the first after the PC]",
+    console.registerCommand("netjoin", "join a two-player session: netjoin <host> [port, 7777] [party member to play, the first after the PC, or hero for nethero's]",
                             logged("netjoin", [&game, print](const ConsoleArgs &args) {
                                 if (args.size() < 2 || args.size() > 4) {
                                     throw std::runtime_error("Usage: netjoin <host> [port] [npc]");
@@ -958,9 +1394,61 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
                                 if (port <= 0 || port > 65535) {
                                     throw std::runtime_error("Usage: netjoin <host> [port] [npc]");
                                 }
-                                int npc = args.size() > 3 ? args.get<int>(3).value_or(-99) : defaultGuestNpc(game);
+                                int npc = guestNpcArg(game, args, 3);
                                 game.netSession().join(std::string(*args[1]), static_cast<uint16_t>(port), npc);
                                 print(game.netSession().status());
+                            }));
+    console.registerCommand("nethero", "the hero this side brings to a session: nethero [<file> | quick <class> <male|female> <name> | save <file>]",
+                            logged("nethero", [&game, print](const ConsoleArgs &args) {
+                                auto &session = game.netSession();
+                                if (args.size() == 1) {
+                                    print(session.hero() ? "nethero: " + heroSummary(*session.hero()) : std::string("nethero: none"));
+                                    return;
+                                }
+                                std::string first(*args[1]);
+                                if (boost::iequals(first, "quick")) {
+                                    if (args.size() < 5) {
+                                        throw std::runtime_error("Usage: nethero quick <class> <male|female> <name>");
+                                    }
+                                    std::string gender(boost::to_lower_copy(std::string(*args[3])));
+                                    if (gender != "male" && gender != "female") {
+                                        throw std::runtime_error("Usage: nethero quick <class> <male|female> <name>");
+                                    }
+                                    std::string name(*args[4]);
+                                    for (size_t i = 5; i < args.size(); ++i) {
+                                        name += " " + std::string(*args[i]);
+                                    }
+                                    session.setHero(quickNetHero(session.services(), heroClassArg(std::string(*args[2])),
+                                                                 gender == "female" ? Gender::Female : Gender::Male, name));
+                                } else if (boost::iequals(first, "save")) {
+                                    if (args.size() != 3 || !session.hero()) {
+                                        throw std::runtime_error("Usage: nethero save <file>, with a hero set");
+                                    }
+                                    std::ofstream out(std::string(*args[2]), std::ios::binary);
+                                    out << writeNetHero(*session.hero());
+                                    if (!out) {
+                                        throw std::runtime_error("Couldn't write " + std::string(*args[2]));
+                                    }
+                                } else {
+                                    if (args.size() != 2) {
+                                        throw std::runtime_error("Usage: nethero <file>");
+                                    }
+                                    std::ifstream in(first, std::ios::binary);
+                                    if (!in) {
+                                        throw std::runtime_error("No hero file " + first);
+                                    }
+                                    std::stringstream text;
+                                    text << in.rdbuf();
+                                    session.setHero(readNetHero(text.str(), session.services().game.classes));
+                                }
+                                print("nethero: " + heroSummary(*session.hero()));
+                            }));
+    console.registerCommand("netheromake", "make a two-player session's hero with KOTOR's character creation, from the main menu: netheromake <file>",
+                            logged("netheromake", [&game](const ConsoleArgs &args) {
+                                if (args.size() != 2) {
+                                    throw std::runtime_error("Usage: netheromake <file>");
+                                }
+                                game.makeSessionHero(std::string(*args[1]));
                             }));
     console.registerCommand("netstatus", "log the two-player session's state and counts: netstatus",
                             logged("netstatus", [&game, print](const ConsoleArgs &) {

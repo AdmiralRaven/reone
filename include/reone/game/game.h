@@ -532,6 +532,41 @@ public:
         const std::string &resRef,
         std::string sceneName = kSceneMain);
 
+    /**
+     * A creature at \p id, as a two-player session makes its second hero at
+     * the same ID on both sides; none if the ID is taken, or was ever used in
+     * this session.
+     */
+    std::shared_ptr<Creature> newCreatureAtId(uint32_t id, std::string sceneName = kSceneMain) {
+        if (_objectById.count(id) || _publishedRuntimeObjectIds.count(id) || _reservedSavedObjectIds.count(id) ||
+            id < kFirstRuntimeObjectId || id >= _nextPresentationObjectId) {
+            return nullptr;
+        }
+        return newObjectAtId<Creature>(id, false, std::move(sceneName), *this, _services);
+    }
+
+    /**
+     * Opens KOTOR's character creation to make a two-player session's second
+     * hero (#39): at its end the hero is written to \p path, as writeNetHero
+     * has it, instead of starting a game, and the engine quits.
+     *
+     * \throws std::runtime_error while a game is loaded
+     */
+    void makeSessionHero(const std::string &path);
+
+    /** Where character creation writes the hero it makes, while it makes one. */
+    const std::optional<std::string> &sessionHeroFile() const { return _sessionHeroFile; }
+
+    /** Whether the object is left out of saves and of a session's object check, as a second hero is. */
+    bool isSessionOnly(uint32_t id) const { return _sessionOnlyObjects.count(id) > 0; }
+    void setSessionOnly(uint32_t id, bool sessionOnly) {
+        if (sessionOnly) {
+            _sessionOnlyObjects.insert(id);
+        } else {
+            _sessionOnlyObjects.erase(id);
+        }
+    }
+
     inline std::shared_ptr<Placeable> newPlaceable(std::string sceneName = kSceneMain) {
         return newObject<Placeable>(std::move(sceneName), *this, _services);
     }
@@ -894,6 +929,8 @@ private:
     std::shared_ptr<PresentationPointer> _pointer;
     std::shared_ptr<JaSaber> _jaSaber;
     std::shared_ptr<NetSession> _netSession;
+    std::set<uint32_t> _sessionOnlyObjects;
+    std::optional<std::string> _sessionHeroFile;
     bool _followingHost {false};
     float _gameSpeed {1.0f};
     CameraType _cameraType {CameraType::ThirdPerson};

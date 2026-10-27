@@ -736,6 +736,30 @@ void Party::setPartyLeaderByIndex(int index) {
     onLeaderChanged();
 }
 
+void Party::addSessionHero(const std::shared_ptr<Creature> &creature) {
+    if (!creature || isMember(*creature)) {
+        return;
+    }
+    removeSessionHero();
+    Member member;
+    member.npc = kNpcSessionHero;
+    member.creature = creature;
+    _members.insert(_members.begin(), std::move(member));
+    onLeaderChanged();
+}
+
+void Party::removeSessionHero() {
+    auto it = std::find_if(_members.begin(), _members.end(), [](const Member &member) { return member.npc == kNpcSessionHero; });
+    if (it == _members.end()) {
+        return;
+    }
+    bool leading = it == _members.begin();
+    _members.erase(it);
+    if (leading && !_members.empty() && _game.module() && _game.module()->area()) {
+        onLeaderChanged();
+    }
+}
+
 void Party::setPlayer(const std::shared_ptr<Creature> &player) {
     _player = player;
 }

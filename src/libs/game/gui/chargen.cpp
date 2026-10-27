@@ -28,9 +28,13 @@
 #include "reone/game/d20/classes.h"
 #include "reone/game/di/services.h"
 #include "reone/game/game.h"
+#include "reone/game/netsession.h"
 #include "reone/game/party.h"
 #include "reone/game/portraits.h"
 #include "reone/game/types.h"
+#include "reone/system/logutil.h"
+
+#include <fstream>
 
 using namespace reone::audio;
 
@@ -331,6 +335,12 @@ void CharacterGeneration::openLevelUp() {
 }
 
 void CharacterGeneration::cancel() {
+    if (_type != Type::LevelUp && _game.sessionHeroFile()) {
+        // Making a session's hero: no hero, and nothing else to do.
+        info("net: no hero made");
+        _game.quit();
+        return;
+    }
     if (_type == Type::LevelUp) {
         _game.openInGame();
     } else {
@@ -348,6 +358,16 @@ void CharacterGeneration::finish() {
         partyLeader->setMaxHitPoints(
             partyLeader->hitPoints() + clazz->hitdie());
         _game.openInGame();
+    } else if (auto path = _game.sessionHeroFile()) {
+        // A two-player session's hero, kept for netjoin, not a new game.
+        std::ofstream out(*path, std::ios::binary);
+        out << writeNetHero(_character);
+        if (out) {
+            info("net: the hero " + _character.name + " is written to " + *path);
+        } else {
+            error("net: couldn't write the hero to " + *path);
+        }
+        _game.quit();
     } else {
         // Character preview objects belong to the pre-playable character-
         // generation runtime. Retire them before publishing the new game.

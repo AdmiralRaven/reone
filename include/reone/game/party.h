@@ -62,6 +62,12 @@ struct RosterIdentity {
     }
 };
 
+/**
+ * The party member number of a two-player session's second hero, the guest's
+ * own character (#39): outside KOTOR's roster, never saved.
+ */
+constexpr int kNpcSessionHero = -2;
+
 class Party {
 public:
     // PARTYTABLE.res stores one ownership count per card type plus one spare
@@ -185,6 +191,15 @@ public:
      */
     bool leaderLocked() const { return _leaderLocked; }
     void setLeaderLocked(bool locked) { _leaderLocked = locked; }
+
+    /**
+     * Makes \p creature, a two-player session's second hero, this side's
+     * party leader, as kNpcSessionHero: not a roster member, and never saved.
+     */
+    void addSessionHero(const std::shared_ptr<Creature> &creature);
+
+    /** Takes the second hero out of the party; whoever is next leads. */
+    void removeSessionHero();
     void setPlayer(const std::shared_ptr<Creature> &player);
     void setActualPlayer(const std::shared_ptr<Creature> &player) { _actualPlayer = player; }
     void setSoloMode(bool value) { _solo = value; }
