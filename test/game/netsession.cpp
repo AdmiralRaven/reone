@@ -35,6 +35,7 @@
 #include "reone/game/savegame.h"
 #include "reone/game/script/runner.h"
 #include "reone/graphics/options.h"
+#include "reone/resource/2da.h"
 #include "reone/scene/graph.h"
 
 using namespace reone;
@@ -1370,6 +1371,98 @@ TEST(NetHero, should_write_a_hero_file_whole_in_place_of_the_old) {
     EXPECT_FALSE(std::filesystem::exists(file.string() + ".new"));
     in.close();
     std::filesystem::remove(file);
+}
+
+namespace {
+
+// KOTOR's xptable.2da, made up: each cell "row's level * 100 + column", so a
+// test can tell which row and column a kill took.
+std::shared_ptr<resource::TwoDA> madeUpXPTable() {
+    resource::TwoDA::Builder builder;
+    std::vector<std::string> columns {"level"};
+    for (int c = 0; c <= 20; ++c) {
+        columns.push_back("c" + std::to_string(c));
+    }
+    builder.columns(columns);
+    for (int level = 1; level <= 20; ++level) {
+        std::vector<std::string> row {std::to_string(level)};
+        for (int c = 0; c <= 20; ++c) {
+            row.push_back(std::to_string(level * 100 + c));
+        }
+        builder.row(row);
+    }
+    return builder.build();
+}
+
+// The shared engine's 2DAs give the made-up table for one test, and nothing
+// after it, however the test ends.
+struct XPTableForThisTest {
+    explicit XPTableForThisTest(resource::MockTwoDAs &twoDas) :
+        twoDas(twoDas) {
+        EXPECT_CALL(twoDas, get(_)).Times(AnyNumber());
+        EXPECT_CALL(twoDas, get("xptable")).WillRepeatedly(Return(table));
+    }
+    ~XPTableForThisTest() {
+        Mock::VerifyAndClearExpectations(&twoDas);
+    }
+    resource::MockTwoDAs &twoDas;
+    std::shared_ptr<resource::TwoDA> table {madeUpXPTable()};
+};
+
+} // namespace
+
+TEST_F(NetSessionTest, should_give_the_party_kotors_experience_for_a_kill_by_the_guests_hero) {
+    // given: the guest's hero in play, and the party at 10,000 experience,
+    // experience level 5
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+    host.game.party().setXP(10000);
+    guest.game.party().setXP(10000);
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    ASSERT_NE(0u, guest.net().heroId());
+
+    // when: the guest's hero's saber kills the enemy, whose challenge rating is 0
+    EXPECT_TRUE(guest.net().forwardSaberHit(*guest.enemy, JaBodyRegion::Torso));
+    exchange(12);
+
+    // then: the host's party gets row 5, column 0, once, and the guest's
+    // hero has it from the host, not again from its own copy of the kill
+    ASSERT_TRUE(host.enemy->isDead());
+    EXPECT_EQ(10000 + 500, host.game.party().xp());
+    EXPECT_EQ(10000 + 500, guest.game.party().xp());
+    EXPECT_EQ(10000 + 500, guest.game.getObjectById<Creature>(guest.net().heroId())->xp());
+}
+
+TEST_F(NetSessionTest, should_give_no_experience_for_a_party_member_killed) {
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+
+    host.companion->damage(1000, host.enemy);
+
+    ASSERT_TRUE(host.companion->isDead());
+    EXPECT_EQ(0, host.game.party().xp());
+}
+
+TEST_F(NetSessionTest, should_give_no_experience_for_an_enemy_an_enemy_killed) {
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+
+    host.enemy->damage(1000, host.enemy);
+
+    ASSERT_TRUE(host.enemy->isDead());
+    EXPECT_EQ(0, host.game.party().xp());
+}
+
+TEST_F(NetSessionTest, should_give_the_party_experience_for_the_pcs_own_kill) {
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+
+    host.enemy->damage(1000, host.pc);
+
+    ASSERT_TRUE(host.enemy->isDead());
+    EXPECT_EQ(100, host.game.party().xp()); // level 1, challenge rating 0
 }
 
 TEST_F(NetSessionTest, should_give_a_quick_heros_long_name_alike_to_both_sides) {

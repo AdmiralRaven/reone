@@ -56,6 +56,7 @@
 #include "reone/game/object/module.h"
 #include "reone/game/party.h"
 #include "reone/game/portraits.h"
+#include "reone/game/reputes.h"
 #include "reone/game/script/runner.h"
 #include "reone/game/surfaces.h"
 #include "reone/game/twodautil.h"
@@ -980,6 +981,52 @@ void Creature::initializeGeneratedVitality() {
     updateDeathFromCurrentHitPoints();
 }
 
+namespace {
+
+// KOTOR's experience for a kill: xptable.2da's row for the main character's
+// experience level, the level its experience reaches, whatever levels it
+// took, and its column for the dead creature's challenge rating. Rounding the
+// rating down is a guess: below 1 is the table's first column, "< 1".
+int killExperience(const TwoDA &xptable, float challengeRating, int partyXP) {
+    int xp = std::max(partyXP, 0);
+    int level = 1;
+    while (level < 20 && xp >= level * (level + 1) * 500) {
+        ++level;
+    }
+    int column = std::clamp(static_cast<int>(std::floor(challengeRating)), 0, 20);
+    return xptable.getInt(level - 1, "c" + std::to_string(column), 0);
+}
+
+void awardKillExperience(Game &game, ServicesView &services, const Creature &dead, float challengeRating,
+                         const std::shared_ptr<Object> &killer) {
+    // A two-player session's guest: the host's experience comes in its snapshots.
+    if (game.followingHost()) {
+        return;
+    }
+    auto pc = game.party().player();
+    auto killerCreature = killer ? dyn_cast<Creature>(killer) : nullptr;
+    if (!pc || !killerCreature || pc.get() == &dead || game.party().isMember(dead)) {
+        return;
+    }
+    // KOTOR counts the kills of any of the PC's allies, party members or not,
+    // as a session's second hero is on the host.
+    auto &reputes = services.game.reputes;
+    if (!reputes.getIsEnemy(*pc, dead) || reputes.getIsEnemy(*pc, *killerCreature)) {
+        return;
+    }
+    auto xptable = services.resource.twoDas.get("xptable");
+    if (!xptable) {
+        return;
+    }
+    int xp = killExperience(*xptable, challengeRating, game.party().xp());
+    if (xp > 0) {
+        debug(str(boost::format("%s killed %s: %d experience") % killerCreature->tag() % dead.tag() % xp));
+        game.party().awardXP(xp, XPSource::Combat);
+    }
+}
+
+} // namespace
+
 void Creature::damage(
     int amount,
     const std::shared_ptr<Object> &damager) {
@@ -1019,6 +1066,7 @@ void Creature::damage(
     _name = _services.resource.strings.getText(kStrRefRemains);
 
     debug(str(boost::format("Creature %s is dead") % _tag));
+    awardKillExperience(_game, _services, *this, _challengeRating, damager);
 
     playSound(SoundSetEntry::Dead);
     playAnimation(getDieAnimation());
