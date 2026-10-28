@@ -54,8 +54,8 @@ std::string writeNetHero(const Character &character);
 
 /**
  * Writes the hero, as writeNetHero has it, to \p path whole or not at all:
- * to a file beside it first, then in its place, so that a stop halfway
- * leaves the old one.
+ * to a file beside it first, then in its place, so that a stop halfway, or
+ * a rename that fails, leaves the old one.
  *
  * \return whether it was written
  */

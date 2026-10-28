@@ -396,13 +396,11 @@ bool writeNetHeroFile(const std::string &path, const Character &character) {
             return false;
         }
     }
+    // One rename replaces the old file, on Windows (MSVC's runtime) and
+    // elsewhere. If it can't, as with the file held open, the old file stays,
+    // and the new one beside it.
     std::error_code error;
     std::filesystem::rename(temporary, path, error);
-    if (error) {
-        // Where a rename can't replace a file, as some Windows runtimes.
-        std::filesystem::remove(path, error);
-        std::filesystem::rename(temporary, path, error);
-    }
     return !error;
 }
 
