@@ -704,7 +704,9 @@ std::vector<ContextAction> Module::getContextActions(const std::shared_ptr<Objec
 bool Module::handleKeyDown(const input::KeyEvent &event) {
     switch (event.code) {
     case input::KeyCode::Space: {
-        bool paused = !_game.isPaused();
+        // The player's own pause, under any hold of a session's other side:
+        // pausing while held keeps this side paused once the other plays on.
+        bool paused = !_game.isPausedByPlayer();
         _game.setPaused(paused);
         return true;
     }

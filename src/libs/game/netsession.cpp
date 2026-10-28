@@ -57,6 +57,7 @@
 #include "reone/system/logutil.h"
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -383,6 +384,26 @@ std::string writeNetHero(const Character &character) {
     }
     out << "\n";
     return out.str();
+}
+
+bool writeNetHeroFile(const std::string &path, const Character &character) {
+    std::string temporary(path + ".new");
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        out << writeNetHero(character);
+        out.flush();
+        if (!out) {
+            return false;
+        }
+    }
+    std::error_code error;
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        // Where a rename can't replace a file, as some Windows runtimes.
+        std::filesystem::remove(path, error);
+        std::filesystem::rename(temporary, path, error);
+    }
+    return !error;
 }
 
 Character readNetHero(const std::string &text, IClasses &classes) {
@@ -1158,6 +1179,11 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
         }
         ++_counts.received;
         _lastHeard = now();
+        if (newSession) {
+            // A hold of the side's earlier session's goes with it; the new
+            // one's next state says whether it holds.
+            followPause(false);
+        }
         // The other side started over, or a guest joined, again or anew: its
         // messages count from 1 again.
         bool startedOver = newSession && _peerSession;
@@ -1423,9 +1449,7 @@ void NetSession::checkHeroChanged() {
     ++_heroVersion;
     info(str(boost::format("net: this side's hero is now %s; sending it to the host") % heroSummary(now)));
     if (_heroFile) {
-        std::ofstream out(*_heroFile, std::ios::binary);
-        out << text;
-        if (out) {
+        if (writeNetHeroFile(*_heroFile, now)) {
             info("net: the hero " + now.name + " is written to " + *_heroFile);
         } else {
             warn("net: couldn't write the hero to " + *_heroFile);
@@ -1622,7 +1646,7 @@ void NetSession::applyHit(uint32_t targetId, JaBodyRegion region) {
         ++_counts.rejected;
         return;
     }
-    if (_game.currentScreen() != Game::Screen::InGame || now() < _holdUntil) {
+    if (_game.currentScreen() != Game::Screen::InGame || _game.isPaused() || now() < _holdUntil) {
         // Not in play on the host: in a conversation, its menu or paused.
         ++_counts.held;
         return;

@@ -360,9 +360,7 @@ void CharacterGeneration::finish() {
         _game.openInGame();
     } else if (auto path = _game.sessionHeroFile()) {
         // A two-player session's hero, kept for netjoin, not a new game.
-        std::ofstream out(*path, std::ios::binary);
-        out << writeNetHero(_character);
-        if (out) {
+        if (writeNetHeroFile(*path, _character)) {
             info("net: the hero " + _character.name + " is written to " + *path);
         } else {
             error("net: couldn't write the hero to " + *path);

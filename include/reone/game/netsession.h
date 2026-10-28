@@ -52,6 +52,15 @@ struct ServicesView;
  */
 std::string writeNetHero(const Character &character);
 
+/**
+ * Writes the hero, as writeNetHero has it, to \p path whole or not at all:
+ * to a file beside it first, then in its place, so that a stop halfway
+ * leaves the old one.
+ *
+ * \return whether it was written
+ */
+bool writeNetHeroFile(const std::string &path, const Character &character);
+
 /** \throws std::runtime_error when \p text isn't a hero, or names a class KOTOR doesn't have */
 Character readNetHero(const std::string &text, IClasses &classes);
 

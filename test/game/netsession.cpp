@@ -629,6 +629,53 @@ TEST_F(NetSessionTest, should_let_the_host_go_when_a_guest_that_paused_goes_quie
     EXPECT_FALSE(host.game.isPaused());
 }
 
+TEST_F(NetSessionTest, should_keep_a_pause_its_player_took_while_held) {
+    // given: in a fight, the guest paused, holding the host
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+    guest.game.setPaused(true);
+    exchange(12);
+    ASSERT_TRUE(host.game.isPaused());
+
+    // when: the host's player presses the pause key too, then the guest plays on
+    auto space = input::Event::newKeyDown(input::KeyEvent(true, input::KeyCode::Space, 0, false));
+    host.game.module()->handle(space);
+    exchange(12);
+    guest.game.setPaused(false);
+    exchange(12);
+
+    // then: the host stays paused by its own player, and holds the guest
+    EXPECT_TRUE(host.game.isPausedByPlayer());
+    EXPECT_TRUE(host.game.isPaused());
+    EXPECT_TRUE(guest.game.isPaused());
+
+    // when: the host's player presses it again
+    host.game.module()->handle(space);
+    exchange(12);
+
+    // then: both play
+    EXPECT_FALSE(host.game.isPaused());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_hold_the_guests_saber_hits_while_the_host_is_paused) {
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    host.game.setPaused(true);
+    EXPECT_TRUE(guest.net().forwardSaberHit(*guest.enemy, JaBodyRegion::Torso));
+    exchange(12);
+
+    EXPECT_EQ(0, host.net().counts().hitsApplied);
+    EXPECT_LE(1, host.net().counts().held);
+    EXPECT_FALSE(host.enemy->isDead());
+}
+
 // A hero of the guest's own
 
 namespace {
@@ -1276,6 +1323,52 @@ TEST_F(NetSessionTest, should_take_the_guests_level_up_on_the_host_and_keep_it_i
     EXPECT_NE(std::string::npos, text.str().find("class=" + std::to_string(static_cast<int>(ClassType::Soldier)) + ":3"));
     // and: the guest brings the leveled hero next time
     EXPECT_EQ(3, guest.net().hero()->attributes.getClassLevel(ClassType::Soldier));
+    std::filesystem::remove(file);
+}
+
+TEST_F(NetSessionTest, should_let_the_host_go_when_the_guest_that_held_it_joins_again) {
+    // given: the guest's hero in a fight, the guest paused, holding the host
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    host.pc->activateCombat();
+    guest.game.setPaused(true);
+    exchange(12);
+    ASSERT_TRUE(host.game.isPaused());
+
+    // when: it joins again, playing, with a hero the host refuses, so that
+    // it sends no state for a hero
+    guest.net().stop("the test leaves");
+    guest.game.setPaused(false);
+    guest.net().setHero(classes.hero(""));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+
+    // then: the earlier session's hold went with it
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
+}
+
+TEST(NetHero, should_write_a_hero_file_whole_in_place_of_the_old) {
+    HeroClasses classes;
+    NiceMock<MockClasses> lookup;
+    ON_CALL(lookup, get(ClassType::Soldier)).WillByDefault(Return(classes.soldier));
+    auto file = std::filesystem::temp_directory_path() / "reone-netsession-hero-file.txt";
+    std::filesystem::remove(file);
+
+    ASSERT_TRUE(writeNetHeroFile(file.string(), classes.hero("Shan Varra")));
+    ASSERT_TRUE(writeNetHeroFile(file.string(), classes.hero("Kel Dorn")));
+
+    std::ifstream in(file, std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    EXPECT_EQ("Kel Dorn", readNetHero(text.str(), lookup).name);
+    EXPECT_FALSE(std::filesystem::exists(file.string() + ".new"));
+    in.close();
     std::filesystem::remove(file);
 }
 
