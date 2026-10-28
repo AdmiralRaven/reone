@@ -33,6 +33,15 @@ class Button;
 
 namespace game {
 
+/**
+ * KOTOR 1's options menu over the game (user, 2026-10-28): its set dressing,
+ * the panel art filling the root panel, goes, and so does the backdrop the
+ * menu leaves unloaded, so the game shows behind it. The options stay
+ * readable on solid panels: one behind the title, one behind the column of
+ * buttons, and one behind Close.
+ */
+void seeThroughOptions(gui::IGUI &gui);
+
 class OptionsMenu : public GameGUI {
 public:
     OptionsMenu(Game &game, ServicesView &services) :

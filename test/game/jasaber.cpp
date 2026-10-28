@@ -309,6 +309,62 @@ TEST_F(JaSaberMode, should_only_pause_while_the_in_game_menu_is_open) {
     EXPECT_TRUE(game.relativeMouseMode());
 }
 
+TEST_F(JaSaberMode, should_open_the_options_menu_on_escape_and_wait_behind_it) {
+    // when: the player presses Escape, in saber mode
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    play(0.5f);
+
+    // then: the options menu is open, and saber mode waits with the mouse
+    // free; the pause key's pause isn't taken
+    EXPECT_EQ(Game::Screen::InGameMenu, game.currentScreen());
+    EXPECT_TRUE(game.isInPlayerMenu());
+    EXPECT_TRUE(game.jaSaber().isActive());
+    EXPECT_FALSE(game.relativeMouseMode());
+    EXPECT_FALSE(game.isPausedByPlayer());
+
+    // when: Escape again
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    play(0.5f);
+
+    // then: play goes on, in saber mode
+    EXPECT_EQ(Game::Screen::InGame, game.currentScreen());
+    EXPECT_FALSE(game.isInPlayerMenu());
+    EXPECT_TRUE(game.jaSaber().isActive());
+    EXPECT_TRUE(game.relativeMouseMode());
+}
+
+TEST_F(JaSaberMode, should_let_go_of_walking_and_the_mouse_when_the_escape_menu_opens) {
+    // given: out of saber mode, walking forward, the mouse held
+    game.jaSaber().leave("the test leaves saber mode");
+    game.update(1.0f / 60.0f);
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::W)));
+    ASSERT_TRUE(game.module()->player().isMovementRequested());
+    game.setRelativeMouseMode(true);
+
+    // when: Escape opens the menu, which takes the walking key's release,
+    // and Escape closes it
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    EXPECT_FALSE(game.relativeMouseMode());
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+
+    // then: the character doesn't walk on by itself
+    EXPECT_FALSE(game.module()->player().isMovementRequested());
+}
+
+TEST_F(JaSaberMode, should_keep_the_pause_keys_pause_through_the_escape_menu) {
+    // given: paused by the pause key, out of saber mode
+    game.jaSaber().leave("the test leaves saber mode");
+    game.setPaused(true);
+
+    // when: the options menu opens and closes
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+
+    // then: the game is still paused
+    EXPECT_EQ(Game::Screen::InGame, game.currentScreen());
+    EXPECT_TRUE(game.isPaused());
+}
+
 TEST_F(JaSaberMode, should_tilt_the_view_with_the_mouse_within_75_degrees) {
     // given
     float start = game.jaSaber().pitch();

@@ -958,6 +958,26 @@ bool Game::handleKeyDown(const input::KeyEvent &event) {
         }
         break;
 
+    case input::KeyCode::Escape:
+        // Escape opens the options menu, as KOTOR's does, before saber mode
+        // sees the key; the game stands still behind it. Escape again, or
+        // its Close button, plays on.
+        if (_movie) {
+            break;
+        }
+        if (_screen == Screen::InGame) {
+            // Keys held for walking are let go: the menu takes their release.
+            stopMovement();
+            setRelativeMouseMode(false);
+            openInGameMenu(InGameMenuTab::Options);
+            return true;
+        }
+        if (_screen == Screen::InGameMenu) {
+            openInGame();
+            return true;
+        }
+        break;
+
     case input::KeyCode::V:
         // While saber mode is on, V is its view over the shoulder.
         if (_options.game.developer && _screen == Screen::InGame && !(_jaSaber && _jaSaber->isActive())) {
@@ -3882,7 +3902,13 @@ void Game::updateSceneGraph(float dt) {
     }
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
-    sceneGraph.setUpdateRoots(!isPaused());
+    // Behind the in-game menu, which Escape's options menu lets the player
+    // see, the world stands still as when paused. Behind the other menus,
+    // a container's window among them, its animations go on as before. A
+    // guest's world is the host's, which may go on, and moves as its
+    // snapshots say.
+    bool stillBehindMenu = _screen == Screen::InGameMenu && !_followingHost;
+    sceneGraph.setUpdateRoots(!isPaused() && !stillBehindMenu);
     sceneGraph.setRenderAABB(isShowAABBEnabled());
     sceneGraph.setRenderWalkmeshes(isShowWalkmeshEnabled());
     bool renderDeveloperTriggers = _options.game.developer &&
@@ -4017,6 +4043,22 @@ void Game::setGlobalLocation(const std::string &name, const std::shared_ptr<Loca
 
 void Game::setPaused(bool paused) {
     _paused = paused;
+}
+
+bool Game::isInPlayerMenu() const {
+    if (!_module) {
+        return false;
+    }
+    switch (_screen) {
+    case Screen::InGameMenu:
+    case Screen::Container:
+    case Screen::PartySelection:
+    case Screen::SaveLoad:
+    case Screen::CharacterGeneration:
+        return true;
+    default:
+        return false;
+    }
 }
 
 void Game::setRelativeMouseMode(bool relative) {
@@ -4838,36 +4880,40 @@ void Game::applyTurretResult(const std::string &turretModule, Turret::Outcome ou
 
 void Game::openInGameMenu(InGameMenuTab tab) {
     setCursorType(CursorType::Default);
-    switch (tab) {
-    case InGameMenuTab::Equipment:
-        _inGame->openEquipment();
-        break;
-    case InGameMenuTab::Inventory:
-        _inGame->openInventory();
-        break;
-    case InGameMenuTab::Character:
-        _inGame->openCharacter();
-        break;
-    case InGameMenuTab::Abilities:
-        _inGame->openAbilities();
-        break;
-    case InGameMenuTab::Party:
-        _inGame->openPartySelection();
-        break;
-    case InGameMenuTab::Messages:
-        _inGame->openMessages();
-        break;
-    case InGameMenuTab::Journal:
-        _inGame->openJournal();
-        break;
-    case InGameMenuTab::Map:
-        _inGame->openMap();
-        break;
-    case InGameMenuTab::Options:
-        _inGame->openOptions();
-        break;
-    default:
-        break;
+    // Without the menu's GUI, which failed to load (a test game has none),
+    // the screen alone changes: the game stands still until Escape.
+    if (_inGame) {
+        switch (tab) {
+        case InGameMenuTab::Equipment:
+            _inGame->openEquipment();
+            break;
+        case InGameMenuTab::Inventory:
+            _inGame->openInventory();
+            break;
+        case InGameMenuTab::Character:
+            _inGame->openCharacter();
+            break;
+        case InGameMenuTab::Abilities:
+            _inGame->openAbilities();
+            break;
+        case InGameMenuTab::Party:
+            _inGame->openPartySelection();
+            break;
+        case InGameMenuTab::Messages:
+            _inGame->openMessages();
+            break;
+        case InGameMenuTab::Journal:
+            _inGame->openJournal();
+            break;
+        case InGameMenuTab::Map:
+            _inGame->openMap();
+            break;
+        case InGameMenuTab::Options:
+            _inGame->openOptions();
+            break;
+        default:
+            break;
+        }
     }
     changeScreen(Screen::InGameMenu);
 }

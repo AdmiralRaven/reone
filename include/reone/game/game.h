@@ -197,6 +197,15 @@ public:
     bool isPausedByPlayer() const { return _paused; }
 
     /**
+     * Whether a menu this side's player opened is over the game: the in-game
+     * menus (Escape's options among them), a container, the party selection,
+     * saving or loading, or a level-up. The world stands still behind it, as
+     * KOTOR's menus pause it, and a two-player session counts it as this
+     * player's pause.
+     */
+    bool isInPlayerMenu() const;
+
+    /**
      * Holds the game paused whatever this side's player does, as a two-player
      * session does while the other side pauses in a fight; the player's own
      * pause stays as it was under it.

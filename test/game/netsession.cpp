@@ -34,9 +34,13 @@
 #include "reone/game/party.h"
 #include "reone/game/savegame.h"
 #include "reone/game/script/runner.h"
+#include "reone/graphics/animation.h"
+#include "reone/graphics/model.h"
+#include "reone/graphics/modelnode.h"
 #include "reone/graphics/options.h"
 #include "reone/resource/2da.h"
 #include "reone/scene/graph.h"
+#include "reone/scene/node/model.h"
 
 using namespace reone;
 using namespace reone::game;
@@ -675,6 +679,196 @@ TEST_F(NetSessionTest, should_hold_the_guests_saber_hits_while_the_host_is_pause
     EXPECT_EQ(0, host.net().counts().hitsApplied);
     EXPECT_LE(1, host.net().counts().held);
     EXPECT_FALSE(host.enemy->isDead());
+}
+
+// Escape's options menu, and the other menus over the game
+
+namespace {
+
+input::Event escapeKey() {
+    return input::Event::newKeyDown(input::KeyEvent(true, input::KeyCode::Escape, 0, false));
+}
+
+// The shared clock, by a name the tests outside this namespace can use.
+using SessionClock = Clock;
+
+// A model in the scene both sides share, playing a long animation: whether a
+// side's update moves it on says whether that side's world goes on.
+struct Swaying {
+    Swaying(TestEngine &engine, SceneGraph &scene) {
+        const glm::quat none(1.0f, 0.0f, 0.0f, 0.0f);
+        root = std::make_shared<ModelNode>(0, "sway", glm::vec3(0.0f), none, true);
+        model = std::make_shared<Model>("sway", 0, root, std::vector<std::shared_ptr<Animation>>(), "", 1.0f);
+        node = std::make_shared<ModelSceneNode>(*model, ModelUsage::Placeable, scene,
+                                                engine.services().graphics, engine.services().audio, engine.services().resource);
+        node->init();
+        animation = std::make_shared<Animation>("sway", 100.0f, 0.0f, "", root, std::vector<Animation::Event>());
+        node->playAnimation(*animation);
+        scene.addRoot(node);
+    }
+
+    float time() const {
+        return node->animationChannels().front().time;
+    }
+
+    std::shared_ptr<ModelNode> root;
+    std::shared_ptr<Model> model;
+    std::shared_ptr<ModelSceneNode> node;
+    std::shared_ptr<Animation> animation;
+};
+
+} // namespace
+
+TEST_F(NetSessionTest, should_hold_the_host_while_the_guests_menu_is_open_in_a_fight) {
+    // given: joined, the host's party in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+
+    // when: the guest's player opens the options menu
+    EXPECT_TRUE(guest.game.handle(escapeKey()));
+    exchange(12);
+
+    // then: the host waits for it, as for its pause key
+    EXPECT_EQ(Game::Screen::InGameMenu, guest.game.currentScreen());
+    EXPECT_FALSE(guest.game.isPausedByPlayer());
+    EXPECT_TRUE(host.net().guestPausedInFight());
+    EXPECT_TRUE(host.game.isPaused());
+
+    // when: the guest closes it
+    EXPECT_TRUE(guest.game.handle(escapeKey()));
+    exchange(12);
+
+    // then: the host plays on
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_hold_the_guest_while_the_hosts_menu_is_open_in_a_fight) {
+    // given: joined, the host's party in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+
+    // when: the host's player opens the options menu
+    EXPECT_TRUE(host.game.handle(escapeKey()));
+    exchange(12);
+
+    // then: the guest waits for it
+    EXPECT_TRUE(guest.net().hostPausedInFight());
+    EXPECT_TRUE(guest.game.isPaused());
+
+    // when: the host closes it
+    EXPECT_TRUE(host.game.handle(escapeKey()));
+    exchange(12);
+
+    // then: the guest plays on
+    EXPECT_FALSE(guest.net().hostPausedInFight());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_leave_the_other_playing_while_a_menu_is_open_out_of_a_fight) {
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    EXPECT_TRUE(guest.game.handle(escapeKey()));
+    exchange(12);
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
+
+    EXPECT_TRUE(guest.game.handle(escapeKey()));
+    EXPECT_TRUE(host.game.handle(escapeKey()));
+    exchange(12);
+    EXPECT_FALSE(guest.net().hostPausedInFight());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_hold_the_other_while_a_player_is_in_any_menu_over_the_game_in_a_fight) {
+    // given: joined, the host's party in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+
+    // when, then: each menu over the game holds the other side, each screen of play doesn't
+    for (auto screen : {Game::Screen::InGameMenu, Game::Screen::Container, Game::Screen::PartySelection,
+                        Game::Screen::SaveLoad, Game::Screen::CharacterGeneration}) {
+        TestGameModule::setCurrentScreen(guest.game, static_cast<int>(screen));
+        exchange(12);
+        EXPECT_TRUE(host.game.isPaused()) << "the guest on " << static_cast<int>(screen);
+        TestGameModule::setCurrentScreen(guest.game, static_cast<int>(Game::Screen::InGame));
+        exchange(12);
+        EXPECT_FALSE(host.game.isPaused()) << "the guest back from " << static_cast<int>(screen);
+
+        TestGameModule::setCurrentScreen(host.game, static_cast<int>(screen));
+        exchange(12);
+        EXPECT_TRUE(guest.game.isPaused()) << "the host on " << static_cast<int>(screen);
+        TestGameModule::setCurrentScreen(host.game, static_cast<int>(Game::Screen::InGame));
+        exchange(12);
+        EXPECT_FALSE(guest.game.isPaused()) << "the host back from " << static_cast<int>(screen);
+    }
+    TestGameModule::setCurrentScreen(guest.game, static_cast<int>(Game::Screen::Conversation));
+    exchange(12);
+    EXPECT_FALSE(host.game.isPaused()) << "the guest in a conversation";
+}
+
+// On an engine of the test's own, whose scene graphs give out the one real
+// scene the test made: other tests leave the shared engine's giving out theirs.
+TEST(NetSessionScene, should_hold_the_hosts_world_still_behind_its_menu_and_let_the_guests_go_on) {
+    // given: joined, out of a fight, something in the world moving
+    TestEngine engine;
+    engine.init();
+    SharedScene scene(engine);
+    SessionClock clock;
+    Side host(engine);
+    Side guest(engine);
+    host.net().setClock(clock.reader());
+    guest.net().setClock(clock.reader());
+    auto exchange = [&](int frames) {
+        for (int i = 0; i < frames; ++i) {
+            clock.time += 1.0 / 60.0;
+            host.net().update();
+            guest.net().update();
+        }
+    };
+    host.net().host(0, 0);
+    guest.net().join("127.0.0.1", host.net().localPort(), 0);
+    exchange(60);
+    ASSERT_TRUE(guest.net().connected());
+    ASSERT_TRUE(guest.game.followingHost());
+    Swaying sway(engine, *scene.scene);
+    for (int i = 0; i < 30; ++i) {
+        host.game.update(1.0f / 60.0f);
+    }
+    ASSERT_GT(sway.time(), 0.0f);
+
+    // when: both players open the options menu, and the host's game runs
+    EXPECT_TRUE(host.game.handle(escapeKey()));
+    EXPECT_TRUE(guest.game.handle(escapeKey()));
+    float before = sway.time();
+    for (int i = 0; i < 30; ++i) {
+        host.game.update(1.0f / 60.0f);
+    }
+
+    // then: the host's world stands still
+    EXPECT_FLOAT_EQ(before, sway.time());
+
+    // when: the guest's game runs
+    for (int i = 0; i < 30; ++i) {
+        guest.game.update(1.0f / 60.0f);
+    }
+
+    // then: the guest's, the host's as its snapshots say, goes on
+    EXPECT_GT(sway.time(), before);
+    guest.net().stop();
+    host.net().stop();
 }
 
 // A hero of the guest's own

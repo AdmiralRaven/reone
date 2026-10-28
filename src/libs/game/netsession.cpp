@@ -337,6 +337,13 @@ uint64_t sessionStart() {
     return last;
 }
 
+// This side's player's pause, which the other side follows in a fight: the
+// pause key's, or a menu open over the game, as Escape's options menu is
+// (user, 2026-10-28), which stops this side's world as a pause does.
+bool pausedByPlayer(const Game &game) {
+    return game.isPausedByPlayer() || game.isInPlayerMenu();
+}
+
 // "Revan, a level 1 Soldier", for the log.
 std::string heroSummary(const Character &hero) {
     std::string classes;
@@ -977,7 +984,7 @@ void NetSession::sendSnapshot() {
     // As many datagrams as it takes, each under kMaxDatagram.
     // The host's player's pause in a fight, which the guest follows
     // (kFlagPausedInFight); not a hold the guest put on it.
-    uint8_t flags = _game.isPausedByPlayer() && partyInCombat() ? kFlagPausedInFight : 0;
+    uint8_t flags = pausedByPlayer(_game) && partyInCombat() ? kFlagPausedInFight : 0;
     // The party's experience, which the guest's hero shares, as KOTOR's party
     // members do; on the host, the hero, no party member, takes it here.
     int xp = _game.party().xp();
@@ -1010,7 +1017,7 @@ void NetSession::sendGuestState() {
     }
     auto out = header(MessageType::GuestState);
     // The guest's player's pause, which the host follows in a fight.
-    putU8(out, _game.isPausedByPlayer() ? kFlagPaused : 0);
+    putU8(out, pausedByPlayer(_game) ? kFlagPaused : 0);
     putState(out, stateOf(*hero));
     _socket.send(_peer, out);
     ++_counts.sent;

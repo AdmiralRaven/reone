@@ -17,7 +17,13 @@
 
 #include "reone/game/gui/ingame/options.h"
 
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <vector>
+
 #include "reone/game/game.h"
+#include "reone/graphics/texture.h"
 #include "reone/gui/control/button.h"
 
 using namespace reone::audio;
@@ -29,11 +35,69 @@ namespace reone {
 
 namespace game {
 
+namespace {
+
+// Around what each panel backs, in the authored 640x480.
+constexpr int kBackingMargin = 4;
+
+struct Backing {
+    const char *tag;
+    std::vector<std::string> controls;
+};
+
+} // namespace
+
+void seeThroughOptions(IGUI &gui) {
+    gui.rootControl().setBorderFill(std::shared_ptr<Texture>());
+
+    static const std::array<Backing, 3> backings {{
+        {"LBL_SEETHROUGH_TITLE", {"LBL_TITLE"}},
+        {"LBL_SEETHROUGH_BUTTONS", {"BTN_LOADGAME", "BTN_SAVEGAME", "BTN_GAMEPLAY", "BTN_FEEDBACK", "BTN_AUTOPAUSE", "BTN_GRAPHICS", "BTN_SOUND", "BTN_QUIT"}},
+        {"LBL_SEETHROUGH_EXIT", {"BTN_EXIT"}},
+    }};
+    for (auto &backing : backings) {
+        std::optional<Control::Extent> around;
+        for (auto &tag : backing.controls) {
+            auto control = gui.findControl(tag);
+            if (!control) {
+                continue;
+            }
+            const auto &extent = control->authoredExtent();
+            if (!around) {
+                around = extent;
+                continue;
+            }
+            int right = std::max(around->left + around->width, extent.left + extent.width);
+            int bottom = std::max(around->top + around->height, extent.top + extent.height);
+            around->left = std::min(around->left, extent.left);
+            around->top = std::min(around->top, extent.top);
+            around->width = right - around->left;
+            around->height = bottom - around->top;
+        }
+        if (!around) {
+            continue;
+        }
+        Control::Extent extent {
+            around->left - kBackingMargin,
+            around->top - kBackingMargin,
+            around->width + 2 * kBackingMargin,
+            around->height + 2 * kBackingMargin};
+        auto panel = std::shared_ptr<Control>(gui.newControl(ControlType::Panel, backing.tag));
+        panel->setAuthoredExtent(extent);
+        panel->setExtent(extent);
+        panel->setBorderFill("blackfill");
+        // Drawn first, so behind the controls it backs.
+        gui.addControlToFront(std::move(panel), IGUI::ControlCoordinates::Authored);
+    }
+}
+
 void OptionsMenu::onGUILoaded() {
-    loadBackground(BackgroundType::Menu);
     bindControls();
 
-    if (_game.isTSL()) {
+    if (!_game.isTSL()) {
+        seeThroughOptions(*_gui);
+    } else {
+        loadBackground(BackgroundType::Menu);
         fillK2SectionStrip(_controls.LBL_BAR1, _controls.LBL_BAR2);
         _controls.LB_DESC->setTintBorderFill(true);
         useK2ShellTitle(_controls.LBL_TITLE);
