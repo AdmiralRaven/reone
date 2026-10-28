@@ -1456,6 +1456,40 @@ TEST_F(NetSessionTest, should_give_no_experience_for_an_enemy_an_enemy_killed) {
     EXPECT_EQ(0, host.game.party().xp());
 }
 
+TEST_F(NetSessionTest, should_give_no_experience_for_a_friend_killed) {
+    // given: a creature of the PC's side, not in its party
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+    auto friendly = host.game.newCreature();
+    friendly->setTag("end_trooper");
+    friendly->setFaction(Faction::Friendly1);
+    friendly->setMaxHitPoints(10);
+    friendly->setCurrentHitPoints(10);
+    host.game.module()->area()->add(friendly);
+
+    // when: the PC kills it
+    friendly->damage(1000, host.pc);
+
+    // then
+    ASSERT_TRUE(friendly->isDead());
+    EXPECT_EQ(0, host.game.party().xp());
+}
+
+TEST_F(NetSessionTest, should_give_no_experience_of_its_own_on_a_guest) {
+    // given: a guest, following the host
+    XPTableForThisTest xptable(engine.resourceModule().twoDas());
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    // when: an enemy dies on the guest's side, to the guest's copy of the PC
+    guest.enemy->damage(1000, guest.pc);
+
+    // then: the guest's party gains nothing; the host's experience reaches it
+    ASSERT_TRUE(guest.enemy->isDead());
+    EXPECT_EQ(0, guest.game.party().xp());
+}
+
 TEST_F(NetSessionTest, should_give_the_party_experience_for_the_pcs_own_kill) {
     XPTableForThisTest xptable(engine.resourceModule().twoDas());
 
