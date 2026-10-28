@@ -106,7 +106,8 @@ constexpr size_t kHeaderSize = 4 + 2 + 1 + 4 + 4;
 constexpr float kHelloInterval = 0.5f;
 constexpr float kManifestInterval = 2.0f;
 constexpr double kHoldAfterConversation = 1.0;
-constexpr uint8_t kFlagPausedInFight = 1;
+constexpr uint8_t kFlagPausedInFight = 1; // in a snapshot: the host's player paused with its party in a fight
+constexpr uint8_t kFlagPaused = 1;        // in a guest state: the guest's player paused
 constexpr size_t kMaxDatagram = 1400;
 
 // Little-endian writing and reading.
@@ -702,33 +703,30 @@ bool NetSession::partyInCombat() const {
     return hero && hero->isInCombat();
 }
 
-void NetSession::setHero(const Character &hero) {
+void NetSession::setHero(const Character &hero, std::optional<std::string> file) {
     if (_role != NetRole::None) {
         throw std::runtime_error("Set the hero before joining: netoff first");
     }
     _hero = hero;
+    _heroFile = std::move(file);
     // As the host will have it, from writeNetHero.
     _hero->name = heroName(hero.name);
     info("net: the hero to bring is " + heroSummary(*_hero));
 }
 
-void NetSession::followHostPause(bool pausedInFight) {
-    if (pausedInFight) {
-        if (!_hostPausedInFight) {
-            _hostPausedInFight = true;
-            _pausedByHost = !_game.isPaused();
-            info("net: the host paused in a fight; this side waits for it");
-        }
-        // Even if this side's own pause key let go meanwhile.
-        _game.setPaused(true);
-    } else if (_hostPausedInFight) {
-        _hostPausedInFight = false;
-        if (_pausedByHost) {
-            _game.setPaused(false);
-            _pausedByHost = false;
-        }
-        info("net: the host plays on");
+void NetSession::followPause(bool pausedInFight) {
+    // The other side's player paused in a fight: this side is held paused,
+    // whatever its own player does, and its own pause stays as it was under
+    // it. Each side sends only its player's own pause, so that two holds
+    // never keep each other up.
+    if (pausedInFight == _otherPausedInFight) {
+        return;
     }
+    _otherPausedInFight = pausedInFight;
+    _game.setPauseHeld(pausedInFight);
+    const char *other = _role == NetRole::Host ? "guest" : "host";
+    info(pausedInFight ? str(boost::format("net: the %s paused in a fight; this side waits for it") % other)
+                       : str(boost::format("net: the %s plays on") % other));
 }
 
 void NetSession::host(uint16_t port, int guestNpc) {
@@ -814,12 +812,11 @@ void NetSession::stop(const std::string &reason) {
     if (_role == NetRole::Host) {
         _hero.reset();
     }
+    if (_otherPausedInFight) {
+        _game.setPauseHeld(false);
+        _otherPausedInFight = false;
+    }
     if (_role == NetRole::Guest) {
-        if (_hostPausedInFight && _pausedByHost) {
-            _game.setPaused(false);
-        }
-        _hostPausedInFight = false;
-        _pausedByHost = false;
         _game.setFollowingHost(false);
         // The PC leads again.
         if (_game.module() && _game.module()->area()) {
@@ -850,6 +847,10 @@ void NetSession::stop(const std::string &reason) {
     _refusedHeroSession = 0;
     _waitStarted = 0.0;
     _waitUntil = 0.0;
+    _heroVersionApplied = 0;
+    _heroVersionAcked = 0;
+    _heroVersion = 0;
+    _heroText.clear();
     _unknownIds.clear();
     _counts = Counts();
 }
@@ -955,13 +956,22 @@ void NetSession::sendSnapshot() {
         states.push_back(stateOf(*creature));
     }
     // As many datagrams as it takes, each under kMaxDatagram.
-    // The host's pause in a fight, which the guest follows (kFlagPausedInFight).
-    uint8_t flags = _game.isPaused() && partyInCombat() ? kFlagPausedInFight : 0;
-    size_t perDatagram = (kMaxDatagram - kHeaderSize - 3) / 24;
+    // The host's player's pause in a fight, which the guest follows
+    // (kFlagPausedInFight); not a hold the guest put on it.
+    uint8_t flags = _game.isPausedByPlayer() && partyInCombat() ? kFlagPausedInFight : 0;
+    // The party's experience, which the guest's hero shares, as KOTOR's party
+    // members do; on the host, the hero, no party member, takes it here.
+    int xp = _game.party().xp();
+    if (hero && hero->xp() != xp) {
+        hero->setXP(xp);
+    }
+    size_t perDatagram = (kMaxDatagram - kHeaderSize - 11) / 24;
     for (size_t first = 0; first < states.size() || first == 0; first += perDatagram) {
         auto out = header(MessageType::Snapshot);
         size_t count = std::min(perDatagram, states.size() - std::min(first, states.size()));
         putU8(out, flags);
+        putU32(out, static_cast<uint32_t>(std::max(xp, 0)));
+        putU32(out, _heroVersionApplied);
         putU16(out, static_cast<uint16_t>(count));
         for (size_t i = first; i < first + count; ++i) {
             putState(out, states[i]);
@@ -980,6 +990,8 @@ void NetSession::sendGuestState() {
         return;
     }
     auto out = header(MessageType::GuestState);
+    // The guest's player's pause, which the host follows in a fight.
+    putU8(out, _game.isPausedByPlayer() ? kFlagPaused : 0);
     putState(out, stateOf(*hero));
     _socket.send(_peer, out);
     ++_counts.sent;
@@ -1020,6 +1032,8 @@ void NetSession::update() {
     if (_connected && time - _lastHeard > kTimeout) {
         info(str(boost::format("net: nothing from %s for %.0f s") % _peer.str() % kTimeout));
         _connected = false;
+        // A side gone quiet holds no pause.
+        followPause(false);
     }
     // A command file waiting for the other side goes on once it is here.
     checkWait();
@@ -1037,6 +1051,17 @@ void NetSession::update() {
         // Now and then, for both sides to compare their objects again.
         _sinceHello = 0.0f;
         sendHello();
+    }
+    if (_role == NetRole::Guest && _guestNpc == kNpcSessionHero && _heroId) {
+        // A level-up of the hero's, which the host takes, and the file keeps.
+        _sinceHeroUpdate += elapsed;
+        if (_sinceHeroUpdate >= kHelloInterval) {
+            _sinceHeroUpdate = 0.0f;
+            checkHeroChanged();
+            if (_heroVersionAcked < _heroVersion) {
+                sendHeroUpdate();
+            }
+        }
     }
     if (_role == NetRole::Guest && _guestNpc == kNpcSessionHero && !_heroId) {
         // The hero of this side's own, until the host says it has made it.
@@ -1186,12 +1211,22 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             return;
         }
         uint8_t flags = in.u8();
+        int xp = static_cast<int>(in.u32());
+        uint32_t heroVersionTaken = in.u32();
         uint16_t count = in.u16();
         if (!in.ok()) {
             ++_counts.rejected;
             return;
         }
-        followHostPause((flags & kFlagPausedInFight) != 0);
+        followPause((flags & kFlagPausedInFight) != 0);
+        _heroVersionAcked = std::max(_heroVersionAcked, heroVersionTaken);
+        // The host's party experience, which every member here shares, the
+        // hero among them: KOTOR then offers it a level-up.
+        auto &party = _game.party();
+        auto ownHero = guestHero();
+        if (party.xp() != xp || (ownHero && ownHero->xp() != xp)) {
+            party.setXP(xp);
+        }
         auto hero = guestHero();
         for (uint16_t i = 0; i < count; ++i) {
             auto state = readState(in);
@@ -1215,7 +1250,12 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
             return;
         }
         _lastReceived = sequence;
+        uint8_t flags = in.u8();
         auto state = readState(in);
+        if (in.ok()) {
+            // The guest's pause holds this side only in a fight, as the host decides.
+            followPause((flags & kFlagPaused) != 0 && partyInCombat());
+        }
         auto hero = guestHero();
         if (in.ok() && !hero && !_warnedNoHero) {
             _warnedNoHero = true;
@@ -1267,6 +1307,12 @@ void NetSession::handle(const NetSocket::Datagram &datagram) {
     case MessageType::HeroReady: {
         if (_role == NetRole::Guest) {
             handleHeroReady(bytes);
+        }
+        break;
+    }
+    case MessageType::HeroUpdate: {
+        if (_role == NetRole::Host) {
+            handleHeroUpdate(bytes);
         }
         break;
     }
@@ -1361,6 +1407,86 @@ void NetSession::sendHeroReady() {
     ++_counts.sent;
 }
 
+void NetSession::checkHeroChanged() {
+    auto hero = guestHero();
+    if (!hero || !_hero) {
+        return;
+    }
+    Character now(*_hero);
+    now.attributes = hero->attributes();
+    std::string text(writeNetHero(now));
+    if (text == _heroText) {
+        return;
+    }
+    _heroText = text;
+    _hero = now;
+    ++_heroVersion;
+    info(str(boost::format("net: this side's hero is now %s; sending it to the host") % heroSummary(now)));
+    if (_heroFile) {
+        std::ofstream out(*_heroFile, std::ios::binary);
+        out << text;
+        if (out) {
+            info("net: the hero " + now.name + " is written to " + *_heroFile);
+        } else {
+            warn("net: couldn't write the hero to " + *_heroFile);
+        }
+    }
+}
+
+void NetSession::sendHeroUpdate() {
+    auto out = header(MessageType::HeroUpdate);
+    putU32(out, _heroVersion);
+    putU16(out, static_cast<uint16_t>(_heroText.size()));
+    out.insert(out.end(), _heroText.begin(), _heroText.end());
+    _socket.send(_peer, out);
+    ++_counts.sent;
+}
+
+void NetSession::handleHeroUpdate(const std::vector<uint8_t> &bytes) {
+    auto hero = guestHero();
+    if (_guestNpc != kNpcSessionHero || !hero) {
+        ++_counts.rejected;
+        return;
+    }
+    Reader in(bytes, kHeaderSize);
+    uint32_t version = in.u32();
+    uint16_t size = in.u16();
+    constexpr size_t kTextAt = kHeaderSize + 4 + 2;
+    if (!in.ok() || kTextAt + size > bytes.size()) {
+        ++_counts.rejected;
+        return;
+    }
+    if (version <= _heroVersionApplied) {
+        // Taken already: the guest hasn't heard yet.
+        return;
+    }
+    Character character;
+    try {
+        character = readNetHero(std::string(bytes.begin() + kTextAt, bytes.begin() + kTextAt + size), _services.game.classes);
+    } catch (const std::exception &e) {
+        ++_counts.rejected;
+        warn(std::string("net: the guest's hero update won't do: ") + e.what());
+        _heroVersionApplied = version;
+        return;
+    }
+    // As CharacterGeneration::finish levels up the party leader: the new
+    // attributes, and each new level's hit die on the base hit points.
+    int gained = 0;
+    for (auto &[clazz, levels] : character.attributes.classLevels()) {
+        int before = hero->attributes().getClassLevel(clazz->type());
+        if (levels > before) {
+            gained += (levels - before) * clazz->hitdie();
+        }
+    }
+    hero->attributes() = character.attributes;
+    if (gained > 0) {
+        hero->setMaxHitPoints(hero->hitPoints() + gained);
+    }
+    _hero = character;
+    _heroVersionApplied = version;
+    info("net: the guest's hero is now " + heroSummary(character));
+}
+
 void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes, uint32_t session) {
     if (_guestNpc != kNpcSessionHero) {
         ++_counts.rejected;
@@ -1423,6 +1549,7 @@ void NetSession::handleHeroSpec(const std::vector<uint8_t> &bytes, uint32_t sess
     _hero = character;
     _heroId = hero->id();
     _heroSession = session;
+    _heroVersionApplied = 0;
     info(str(boost::format("net: the guest's hero joins: %s, at %.2f %.2f") % heroSummary(character) %
              hero->position().x % hero->position().y));
     sendHeroReady();
@@ -1456,6 +1583,10 @@ void NetSession::handleHeroReady(const std::vector<uint8_t> &bytes) {
     module->area()->add(hero);
     module->area()->determineObjectRoom(*hero);
     _heroId = id;
+    _heroText = writeNetHero(*_hero);
+    _heroVersion = 0;
+    _heroVersionAcked = 0;
+    _sinceHeroUpdate = 0.0f;
     // This side plays it: the party's leader, for the controls, camera and saber mode.
     auto &party = _game.party();
     party.setLeaderLocked(false);
@@ -1625,7 +1756,7 @@ void registerNetConsoleCommands(Game &game, IConsole &console) {
                                     }
                                     std::stringstream text;
                                     text << in.rdbuf();
-                                    session.setHero(readNetHero(text.str(), session.services().game.classes));
+                                    session.setHero(readNetHero(text.str(), session.services().game.classes), first);
                                 }
                                 print("nethero: " + heroSummary(*session.hero()));
                             }));

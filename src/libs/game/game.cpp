@@ -878,7 +878,7 @@ void Game::update(float frameTime) {
     jaSaber().updateFrame();
 
     bool updModule = !_movie && _module && (_screen == Screen::InGame || _screen == Screen::Conversation);
-    if (updModule && !_paused) {
+    if (updModule && !isPaused()) {
         _floatingText.update(dt);
         advanceWorldTime(dt);
         advancePlayedTime(dt);
@@ -911,7 +911,7 @@ void Game::update(float frameTime) {
         _confirmPopup->update(dt);
     }
     updateSceneGraph(dt);
-    if (!_paused) {
+    if (!isPaused()) {
         updateDrawDebug(dt);
     }
     if (_showImGui) {
@@ -1669,6 +1669,7 @@ void Game::retireRuntimeSession() {
     _cameraType = CameraType::ThirdPerson;
     _savedCameraType = CameraType::ThirdPerson;
     _paused = false;
+    _pauseHeld = false;
     _relativeMouseMode = false;
 
     _statusSummary.reset();
@@ -3881,7 +3882,7 @@ void Game::updateSceneGraph(float dt) {
     }
     auto &sceneGraph = _services.scene.graphs.get(kSceneMain);
     sceneGraph.setActiveCamera(camera->cameraSceneNode().get());
-    sceneGraph.setUpdateRoots(!_paused);
+    sceneGraph.setUpdateRoots(!isPaused());
     sceneGraph.setRenderAABB(isShowAABBEnabled());
     sceneGraph.setRenderWalkmeshes(isShowWalkmeshEnabled());
     bool renderDeveloperTriggers = _options.game.developer &&

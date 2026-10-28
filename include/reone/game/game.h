@@ -190,7 +190,20 @@ public:
 
     void playVideo(const std::string &name);
 
-    bool isPaused() const { return _paused; }
+    /** Whether the game is paused: by this side's player, or held by the other side of a session. */
+    bool isPaused() const { return _paused || _pauseHeld; }
+
+    /** Whether this side's player paused it, as the pause key and setPaused do. */
+    bool isPausedByPlayer() const { return _paused; }
+
+    /**
+     * Holds the game paused whatever this side's player does, as a two-player
+     * session does while the other side pauses in a fight; the player's own
+     * pause stays as it was under it.
+     */
+    void setPauseHeld(bool held) { _pauseHeld = held; }
+    bool isPauseHeld() const { return _pauseHeld; }
+
     bool isTSL() const { return _gameId == resource::GameID::TSL; }
     resource::GameID gameId() const { return _gameId; }
 
@@ -947,6 +960,7 @@ private:
     CameraType _cameraType {CameraType::ThirdPerson};
     CameraType _savedCameraType {CameraType::ThirdPerson};
     bool _paused {false};
+    bool _pauseHeld {false};
     bool _timingDiscontinuity {false};
     GlobalFade _globalFade;
     GlobalFade::ArrivalTicket _fadeArrival;

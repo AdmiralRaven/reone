@@ -148,8 +148,9 @@ struct NetCreatureState {
  *   and deaths come from the host alone;
  * - the guest runs no scripts, combat rounds, saves or area changes of its
  *   own, and its creatures do nothing but what the host sends;
- * - the host pausing while its party is in combat pauses the guest too, as
- *   the user asked (2026-10-26); out of combat each side pauses alone.
+ * - either side pausing while the host's party is in combat pauses the other
+ *   too, as the user asked (2026-10-26 for the host's pause, 2026-10-28 for
+ *   the guest's); out of combat each side pauses alone.
  *
  * Messages are little-endian, each starting with "RNET", the protocol
  * version and a type. Nothing is retried: a newer snapshot replaces a lost
@@ -172,7 +173,11 @@ public:
      * message carries it, and hellos when the session began, so that a late
      * message from an earlier session is dropped.
      */
-    static constexpr uint16_t kProtocol = 4;
+    /**
+     * 5: guest states carry the guest's pause; snapshots carry the party's
+     * experience and the guest's hero's last update taken; HeroUpdate.
+     */
+    static constexpr uint16_t kProtocol = 5;
 
     enum class MessageType : uint8_t {
         Hello = 1,
@@ -180,7 +185,8 @@ public:
         GuestState = 3,
         GuestHit = 4,
         HeroSpec = 5, /**< the guest's own hero, as writeNetHero has it, for the guest's session number */
-        HeroReady = 6 /**< the host made it, in the host's session: its ID and where it stands */
+        HeroReady = 6, /**< the host made it, in the host's session: its ID and where it stands */
+        HeroUpdate = 7 /**< the guest's hero after a level-up, numbered, as writeNetHero has it */
     };
 
     NetSession(Game &game, ServicesView &services);
@@ -199,7 +205,13 @@ public:
     int guestNpc() const { return _guestNpc; }
 
     /** On the guest, before joining with kNpcSessionHero: the hero it brings. */
-    void setHero(const Character &hero);
+    void setHero(const Character &hero, std::optional<std::string> file = std::nullopt);
+
+    /** The file the guest's hero came from, which its level-ups are written back to; none for a quick hero. */
+    const std::optional<std::string> &heroFile() const { return _heroFile; }
+
+    /** On the guest, the hero's updates made so far, as after level-ups; on the host, the last one taken. */
+    uint32_t heroVersion() const { return _role == NetRole::Host ? _heroVersionApplied : _heroVersion; }
     const std::optional<Character> &hero() const { return _hero; }
 
     ServicesView &services() { return _services; }
@@ -277,7 +289,10 @@ public:
     const Counts &counts() const { return _counts; }
 
     /** On the guest, whether the host has paused in a fight, which pauses this side too. */
-    bool hostPausedInFight() const { return _hostPausedInFight; }
+    bool hostPausedInFight() const { return _role == NetRole::Guest && _otherPausedInFight; }
+
+    /** On the host, whether the guest has paused in a fight, which pauses this side too. */
+    bool guestPausedInFight() const { return _role == NetRole::Host && _otherPausedInFight; }
 
     /** The other side's session number, from its hellos; none before the first. */
     std::optional<uint32_t> peerSession() const { return _peerSession; }
@@ -311,11 +326,16 @@ private:
     uint32_t _refusedHeroSession {0};    /**< on the host, the guest's session whose hero was refused, warned of once */
     double _waitStarted {0.0};
     double _waitUntil {0.0};
-    bool _hostPausedInFight {false};
+    bool _otherPausedInFight {false}; /**< the other side paused in a fight, which holds this side paused */
     std::optional<Character> _hero; /**< the guest's own hero, to send; the host's copy once received */
     uint32_t _heroId {0};
     float _sinceHeroSpec {0.0f};
-    bool _pausedByHost {false}; /**< whether the guest was playing when the host's pause stopped it */
+    std::optional<std::string> _heroFile; /**< on the guest, where the hero came from and its level-ups go */
+    std::string _heroText;               /**< on the guest, the hero as last sent, to see a level-up */
+    uint32_t _heroVersion {0};           /**< on the guest, the hero's updates so far */
+    uint32_t _heroVersionAcked {0};      /**< on the guest, the last the host has taken */
+    uint32_t _heroVersionApplied {0};    /**< on the host, the last update taken */
+    float _sinceHeroUpdate {0.0f};
     std::set<uint32_t> _unknownIds;
     std::optional<bool> _manifestsMatch;
     NetSocket::Address _refused; /**< the last side refused for playing another member, warned of once */
@@ -325,13 +345,16 @@ private:
     double now() const;
     std::shared_ptr<Creature> guestHero() const;
     bool partyInCombat() const;
-    void followHostPause(bool pausedInFight);
+    void followPause(bool pausedInFight);
     void sendHeroSpec();
     void sendHeroReady();
+    void sendHeroUpdate();
+    void checkHeroChanged();
     bool peerReady() const;
     void checkWait();
     void handleHeroSpec(const std::vector<uint8_t> &bytes, uint32_t session);
     void handleHeroReady(const std::vector<uint8_t> &bytes);
+    void handleHeroUpdate(const std::vector<uint8_t> &bytes);
     void removeHero();
     std::vector<uint8_t> header(MessageType type);
     void sendHello();

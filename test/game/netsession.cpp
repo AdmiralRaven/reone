@@ -15,6 +15,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -526,6 +530,103 @@ TEST_F(NetSessionTest, should_keep_the_guests_own_pause_when_the_host_plays_on) 
 
     // then: the guest's own pause stays
     EXPECT_TRUE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_pause_the_host_while_the_guest_pauses_in_a_fight) {
+    // given: joined, the host's party in a fight
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+
+    // when: the guest pauses
+    guest.game.setPaused(true);
+    exchange(12);
+
+    // then: so does the host, and its own pause key doesn't let it go
+    EXPECT_TRUE(host.net().guestPausedInFight());
+    EXPECT_TRUE(host.game.isPaused());
+    host.game.setPaused(false);
+    exchange(12);
+    EXPECT_TRUE(host.game.isPaused());
+    // and: the guest isn't held in turn, only paused by its own player
+    EXPECT_FALSE(guest.net().hostPausedInFight());
+
+    // when: the guest plays on
+    guest.game.setPaused(false);
+    exchange(12);
+
+    // then: so do both
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_leave_the_host_playing_when_the_guest_pauses_out_of_combat) {
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+
+    guest.game.setPaused(true);
+    exchange(12);
+
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
+    EXPECT_TRUE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_let_both_play_on_once_both_pauses_in_a_fight_end) {
+    // given: in a fight, the host paused, then the guest too
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+    host.game.setPaused(true);
+    exchange(12);
+    guest.game.setPaused(true);
+    exchange(12);
+
+    // when: the host plays on
+    host.game.setPaused(false);
+    exchange(12);
+
+    // then: both still wait, for the guest
+    EXPECT_TRUE(host.game.isPaused());
+    EXPECT_TRUE(guest.game.isPaused());
+
+    // when: the guest plays on too
+    guest.game.setPaused(false);
+    exchange(12);
+
+    // then: both play
+    EXPECT_FALSE(host.game.isPaused());
+    EXPECT_FALSE(guest.game.isPaused());
+}
+
+TEST_F(NetSessionTest, should_let_the_host_go_when_a_guest_that_paused_goes_quiet) {
+    // given: the guest paused in a fight, holding the host
+    host.net().host(0, 0);
+    hostPort = host.net().localPort();
+    guest.net().join("127.0.0.1", hostPort, 0);
+    exchange(60);
+    host.pc->activateCombat();
+    guest.game.setPaused(true);
+    exchange(12);
+    ASSERT_TRUE(host.game.isPaused());
+
+    // when: the guest's window closes, and 5 s pass
+    guest.net().stop("the test closes the guest");
+    for (int i = 0; i < 360; ++i) {
+        clock.time += 1.0 / 60.0;
+        host.net().update();
+    }
+
+    // then: the host plays on
+    EXPECT_FALSE(host.net().guestPausedInFight());
+    EXPECT_FALSE(host.game.isPaused());
 }
 
 // A hero of the guest's own
@@ -1109,6 +1210,73 @@ TEST_F(NetSessionRelayTest, should_drop_a_late_snapshot_from_the_hosts_earlier_s
     // then: the guest shows it where the host has it now
     EXPECT_NEAR(7.0f, guest.enemy->position().x, 1e-5f);
     EXPECT_LE(1, guest.net().counts().stale);
+}
+
+TEST_F(NetSessionTest, should_share_the_partys_experience_with_the_guests_hero) {
+    // given: the guest's hero in play, level 2, and the host's party with
+    // the experience for level 4
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"));
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    uint32_t id = host.net().heroId();
+    ASSERT_NE(0u, id);
+
+    // when: the host's party gains experience
+    host.game.party().setXP(6000);
+    exchange(12);
+
+    // then: the hero has it on both sides, and a level-up waits on the guest's
+    auto onHost = host.game.getObjectById<Creature>(id);
+    auto onGuest = guest.game.getObjectById<Creature>(id);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    EXPECT_EQ(6000, onGuest->xp());
+    EXPECT_EQ(6000, onHost->xp());
+    EXPECT_EQ(6000, guest.game.party().xp());
+    EXPECT_TRUE(onGuest->isLevelUpPending());
+}
+
+TEST_F(NetSessionTest, should_take_the_guests_level_up_on_the_host_and_keep_it_in_the_hero_file) {
+    // given: the guest's hero, from a file, in play at level 2
+    HeroClasses classes;
+    EXPECT_CALL(engine.gameModule().classes(), get(_)).WillRepeatedly(Return(classes.soldier));
+    auto file = std::filesystem::temp_directory_path() / "reone-netsession-hero.txt";
+    std::filesystem::remove(file);
+    host.net().host(0, kNpcSessionHero);
+    hostPort = host.net().localPort();
+    guest.net().setHero(classes.hero("Shan Varra"), file.string());
+    guest.net().join("127.0.0.1", hostPort, kNpcSessionHero);
+    exchange(60);
+    uint32_t id = host.net().heroId();
+    auto onHost = host.game.getObjectById<Creature>(id);
+    auto onGuest = guest.game.getObjectById<Creature>(id);
+    ASSERT_TRUE(onHost);
+    ASSERT_TRUE(onGuest);
+    int baseBefore = onHost->hitPoints();
+
+    // when: the guest levels its hero up, as CharacterGeneration::finish does
+    onGuest->attributes().addClassLevels(classes.soldier.get(), 1);
+    onGuest->setMaxHitPoints(onGuest->hitPoints() + classes.soldier->hitdie());
+    exchange(60);
+
+    // then: the host's hero is level 3 too (the test's class has no hit die
+    // from the game's data, so its hit points can't show the new level's)
+    EXPECT_EQ(3, onHost->attributes().getClassLevel(ClassType::Soldier));
+    EXPECT_EQ(baseBefore + classes.soldier->hitdie(), onHost->hitPoints());
+    EXPECT_EQ(1u, guest.net().heroVersion());
+    EXPECT_EQ(1u, host.net().heroVersion());
+    // and: the file keeps the level, for the next session
+    std::ifstream in(file);
+    std::stringstream text;
+    text << in.rdbuf();
+    EXPECT_NE(std::string::npos, text.str().find("class=" + std::to_string(static_cast<int>(ClassType::Soldier)) + ":3"));
+    // and: the guest brings the leveled hero next time
+    EXPECT_EQ(3, guest.net().hero()->attributes.getClassLevel(ClassType::Soldier));
+    std::filesystem::remove(file);
 }
 
 TEST_F(NetSessionTest, should_give_a_quick_heros_long_name_alike_to_both_sides) {
