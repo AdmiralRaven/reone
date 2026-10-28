@@ -333,6 +333,24 @@ TEST_F(JaSaberMode, should_open_the_options_menu_on_escape_and_wait_behind_it) {
     EXPECT_TRUE(game.relativeMouseMode());
 }
 
+TEST_F(JaSaberMode, should_let_go_of_the_attack_button_held_through_the_escape_menu) {
+    // given: in saber mode, the attack button held down, swinging
+    play(0.5f);
+    EXPECT_TRUE(game.handle(input::Event::newMouseButtonDown({input::MouseButton::Left, true, 1, 0, 0})));
+    play(1.0f / 60.0f);
+    ASSERT_NE("LS_READY", game.jaSaber().moveName());
+
+    // when: Escape opens the menu, which takes the button's release, and
+    // Escape closes it
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    play(0.25f);
+    EXPECT_TRUE(game.handle(keyDown(input::KeyCode::Escape)));
+    play(3.0f);
+
+    // then: the swings end, as when the button is let go
+    EXPECT_EQ("LS_READY", game.jaSaber().moveName());
+}
+
 TEST_F(JaSaberMode, should_let_go_of_walking_and_the_mouse_when_the_escape_menu_opens) {
     // given: out of saber mode, walking forward, the mouse held
     game.jaSaber().leave("the test leaves saber mode");

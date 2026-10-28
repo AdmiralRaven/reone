@@ -192,13 +192,29 @@ TEST_F(KotorOptionsMenu, should_show_the_game_through_and_back_the_options_with_
         EXPECT_EQ(expected.width, panel->authoredExtent().width) << expected.tag;
         EXPECT_EQ(expected.height, panel->authoredExtent().height) << expected.tag;
         // laid out with the rest, at twice the size on 1280x960
+        EXPECT_EQ(2 * expected.left, panel->extent().left) << expected.tag;
+        EXPECT_EQ(2 * expected.top, panel->extent().top) << expected.tag;
         EXPECT_EQ(2 * expected.width, panel->extent().width) << expected.tag;
+        EXPECT_EQ(2 * expected.height, panel->extent().height) << expected.tag;
         EXPECT_EQ(black, panel->border().fill) << expected.tag;
         EXPECT_FALSE(panel->isSelectable()) << expected.tag;
         int index = childIndex(expected.tag);
         EXPECT_LE(0, index) << expected.tag;
         EXPECT_LT(index, firstOwn) << expected.tag;
     }
+}
+
+TEST_F(KotorOptionsMenu, should_add_its_panels_once_when_the_menu_is_built_again) {
+    // given: the menu's GUI, see-through, as a game leaves it cached
+    auto cached = optionsInGame(engine, nullptr);
+    seeThroughOptions(*cached);
+    size_t controls = cached->rootControl().children().size();
+
+    // when: the next game builds the menu again on it
+    seeThroughOptions(*cached);
+
+    // then: no more panels
+    EXPECT_EQ(controls, cached->rootControl().children().size());
 }
 
 TEST_F(KotorOptionsMenu, should_leave_out_a_panel_for_controls_the_menu_lacks) {

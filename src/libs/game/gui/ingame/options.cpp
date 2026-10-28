@@ -56,6 +56,11 @@ void seeThroughOptions(IGUI &gui) {
         {"LBL_SEETHROUGH_EXIT", {"BTN_EXIT"}},
     }};
     for (auto &backing : backings) {
+        // A new game builds the menu again on the GUI its last one cached,
+        // which has its panels already.
+        if (gui.findControl(backing.tag)) {
+            continue;
+        }
         std::optional<Control::Extent> around;
         for (auto &tag : backing.controls) {
             auto control = gui.findControl(tag);
