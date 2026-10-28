@@ -55,6 +55,8 @@ runs:
         if [ -f ctest.txt ]; then
           sed 's/^[0-9]*: //' ctest.txt | grep -E '^\[==========\]|^\[  PASSED  \]|^\[  SKIPPED \] [0-9]|tests passed|tests failed' | head -n 8 | sed 's/%/%25/g; s/^/::notice title=tests::/' || true
           sed 's/^[0-9]*: //' ctest.txt | grep -E '^\[  FAILED  \] [A-Za-z]' | head -n 9 | sed 's/%/%25/g; s/^/::error title=failed test::/' || true
+          # What each failure said: gtest's own lines, and the two after each.
+          sed 's/^[0-9]*: //' ctest.txt | grep -E -A2 '(: error: |: Failure$|thrown in the test body)' | grep -v '^--$' | head -n 18 | sed 's/%/%25/g; s/^/::error title=failure::/' || true
         fi
         if [ -f build.log ]; then
           grep -E ': (fatal )?error ' build.log | head -n 9 | sed 's/%/%25/g; s/^/::error title=build::/' || true

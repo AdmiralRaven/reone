@@ -1324,7 +1324,10 @@ TEST_F(NetSessionTest, should_take_the_guests_level_up_on_the_host_and_keep_it_i
     EXPECT_NE(std::string::npos, text.str().find("class=" + std::to_string(static_cast<int>(ClassType::Soldier)) + ":3"));
     // and: the guest brings the leveled hero next time
     EXPECT_EQ(3, guest.net().hero()->attributes.getClassLevel(ClassType::Soldier));
-    std::filesystem::remove(file);
+    // Closed first: Windows doesn't remove a file held open.
+    in.close();
+    std::error_code removed;
+    std::filesystem::remove(file, removed);
 }
 
 TEST_F(NetSessionTest, should_let_the_host_go_when_the_guest_that_held_it_joins_again) {
@@ -1370,7 +1373,8 @@ TEST(NetHero, should_write_a_hero_file_whole_in_place_of_the_old) {
     EXPECT_EQ("Kel Dorn", readNetHero(text.str(), lookup).name);
     EXPECT_FALSE(std::filesystem::exists(file.string() + ".new"));
     in.close();
-    std::filesystem::remove(file);
+    std::error_code removed;
+    std::filesystem::remove(file, removed);
 }
 
 namespace {
